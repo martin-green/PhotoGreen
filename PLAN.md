@@ -90,7 +90,7 @@ PhotoGreen/
 |---|---|
 | 3.1 `DevelopSettings` model | Immutable record: Exposure, Contrast, Highlights, Shadows, Whites, Blacks, Temperature, Tint, Vibrance, Saturation, Sharpness, NoiseReduction |
 | 3.2 Tone mapping | Exposure (EV stops), Contrast (S-curve), Highlights, Shadows, Whites, Blacks via tone curves |
-| 3.3 Color balance | Temperature (blue?amber) and Tint (green?magenta) via channel multipliers |
+| 3.3 Color balance | Temperature (blue–amber) and Tint (green–magenta) via channel multipliers |
 | 3.4 HSL panel | Per-channel Hue/Saturation/Luminance |
 | 3.5 Sharpening | Unsharp mask via MagickImage.UnsharpMask() |
 | 3.6 UI sliders | Labeled Slider controls bound to DevelopSettings |
