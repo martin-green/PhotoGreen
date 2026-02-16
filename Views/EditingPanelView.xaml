@@ -1,0 +1,211 @@
+<UserControl x:Class="PhotoGreen.Views.EditingPanelView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Background="#252525">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      Padding="8">
+            <StackPanel Margin="8"
+                        IsEnabled="{Binding IsEnabled}">
+
+                <!-- ======== TONE ======== -->
+                <DockPanel Margin="0,4,0,2">
+                    <TextBlock Text="Tone" FontWeight="Bold" FontSize="13" Foreground="#DDD"
+                               DockPanel.Dock="Left"/>
+                    <Button Content="Reset" FontSize="10" Padding="6,1"
+                            HorizontalAlignment="Right"
+                            Command="{Binding ResetToneCommand}"/>
+                </DockPanel>
+                <Border Height="1" Background="#444" Margin="0,2,0,6"/>
+
+                <!-- Exposure -->
+                <DockPanel Margin="0,2">
+                    <TextBlock Text="Exposure" Width="90" Foreground="#CCC" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding Exposure, StringFormat='{}{0:+0.00;-0.00;0.00}'}"
+                               Width="42" TextAlignment="Right" Foreground="#AAA"
+                               VerticalAlignment="Center" DockPanel.Dock="Right"/>
+                    <Slider Minimum="-5" Maximum="5" Value="{Binding Exposure}"
+                            TickFrequency="0.05" IsSnapToTickEnabled="True"
+                            SmallChange="0.05" LargeChange="0.5"/>
+                </DockPanel>
+
+                <!-- Contrast -->
+                <DockPanel Margin="0,2">
+                    <TextBlock Text="Contrast" Width="90" Foreground="#CCC" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding Contrast, StringFormat='{}{0:0}'}"
+                               Width="42" TextAlignment="Right" Foreground="#AAA"
+                               VerticalAlignment="Center" DockPanel.Dock="Right"/>
+                    <Slider Minimum="-100" Maximum="100" Value="{Binding Contrast}"
+                            TickFrequency="1" IsSnapToTickEnabled="True"/>
+                </DockPanel>
+
+                <!-- Highlights -->
+                <DockPanel Margin="0,2">
+                    <TextBlock Text="Highlights" Width="90" Foreground="#CCC" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding Highlights, StringFormat='{}{0:0}'}"
+                               Width="42" TextAlignment="Right" Foreground="#AAA"
+                               VerticalAlignment="Center" DockPanel.Dock="Right"/>
+                    <Slider Minimum="-100" Maximum="100" Value="{Binding Highlights}"
+                            TickFrequency="1" IsSnapToTickEnabled="True"/>
+                </DockPanel>
+
+                <!-- Shadows -->
+                <DockPanel Margin="0,2">
+                    <TextBlock Text="Shadows" Width="90" Foreground="#CCC" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding Shadows, StringFormat='{}{0:0}'}"
+                               Width="42" TextAlignment="Right" Foreground="#AAA"
+                               VerticalAlignment="Center" DockPanel.Dock="Right"/>
+                    <Slider Minimum="-100" Maximum="100" Value="{Binding Shadows}"
+                            TickFrequency="1" IsSnapToTickEnabled="True"/>
+                </DockPanel>
+
+                <!-- Whites -->
+                <DockPanel Margin="0,2">
+                    <TextBlock Text="Whites" Width="90" Foreground="#CCC" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding Whites, StringFormat='{}{0:0}'}"
+                               Width="42" TextAlignment="Right" Foreground="#AAA"
+                               VerticalAlignment="Center" DockPanel.Dock="Right"/>
+                    <Slider Minimum="-100" Maximum="100" Value="{Binding Whites}"
+                            TickFrequency="1" IsSnapToTickEnabled="True"/>
+                </DockPanel>
+
+                <!-- Blacks -->
+                <DockPanel Margin="0,2">
+                    <TextBlock Text="Blacks" Width="90" Foreground="#CCC" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding Blacks, StringFormat='{}{0:0}'}"
+                               Width="42" TextAlignment="Right" Foreground="#AAA"
+                               VerticalAlignment="Center" DockPanel.Dock="Right"/>
+                    <Slider Minimum="-100" Maximum="100" Value="{Binding Blacks}"
+                            TickFrequency="1" IsSnapToTickEnabled="True"/>
+                </DockPanel>
+
+                <!-- ======== COLOR ======== -->
+                <DockPanel Margin="0,16,0,2">
+                    <TextBlock Text="Color" FontWeight="Bold" FontSize="13" Foreground="#DDD"
+                               DockPanel.Dock="Left"/>
+                    <Button Content="Reset" FontSize="10" Padding="6,1"
+                            HorizontalAlignment="Right"
+                            Command="{Binding ResetColorCommand}"/>
+                </DockPanel>
+                <Border Height="1" Background="#444" Margin="0,2,0,6"/>
+
+                <!-- Temperature -->
+                <DockPanel Margin="0,2">
+                    <TextBlock Text="Temperature" Width="90" Foreground="#CCC" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding Temperature, StringFormat='{}{0:0} K'}"
+                               Width="52" TextAlignment="Right" Foreground="#AAA"
+                               VerticalAlignment="Center" DockPanel.Dock="Right"/>
+                    <Slider Minimum="2000" Maximum="10000" Value="{Binding Temperature}"
+                            TickFrequency="50" IsSnapToTickEnabled="True"
+                            SmallChange="50" LargeChange="500"/>
+                </DockPanel>
+
+                <!-- Tint -->
+                <DockPanel Margin="0,2">
+                    <TextBlock Text="Tint" Width="90" Foreground="#CCC" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding Tint, StringFormat='{}{0:0}'}"
+                               Width="42" TextAlignment="Right" Foreground="#AAA"
+                               VerticalAlignment="Center" DockPanel.Dock="Right"/>
+                    <Slider Minimum="-100" Maximum="100" Value="{Binding Tint}"
+                            TickFrequency="1" IsSnapToTickEnabled="True"/>
+                </DockPanel>
+
+                <!-- Vibrance -->
+                <DockPanel Margin="0,2">
+                    <TextBlock Text="Vibrance" Width="90" Foreground="#CCC" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding Vibrance, StringFormat='{}{0:0}'}"
+                               Width="42" TextAlignment="Right" Foreground="#AAA"
+                               VerticalAlignment="Center" DockPanel.Dock="Right"/>
+                    <Slider Minimum="-100" Maximum="100" Value="{Binding Vibrance}"
+                            TickFrequency="1" IsSnapToTickEnabled="True"/>
+                </DockPanel>
+
+                <!-- Saturation -->
+                <DockPanel Margin="0,2">
+                    <TextBlock Text="Saturation" Width="90" Foreground="#CCC" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding Saturation, StringFormat='{}{0:0}'}"
+                               Width="42" TextAlignment="Right" Foreground="#AAA"
+                               VerticalAlignment="Center" DockPanel.Dock="Right"/>
+                    <Slider Minimum="-100" Maximum="100" Value="{Binding Saturation}"
+                            TickFrequency="1" IsSnapToTickEnabled="True"/>
+                </DockPanel>
+
+                <!-- ======== DETAIL ======== -->
+                <DockPanel Margin="0,16,0,2">
+                    <TextBlock Text="Detail" FontWeight="Bold" FontSize="13" Foreground="#DDD"
+                               DockPanel.Dock="Left"/>
+                    <Button Content="Reset" FontSize="10" Padding="6,1"
+                            HorizontalAlignment="Right"
+                            Command="{Binding ResetDetailCommand}"/>
+                </DockPanel>
+                <Border Height="1" Background="#444" Margin="0,2,0,6"/>
+
+                <!-- Sharpness -->
+                <DockPanel Margin="0,2">
+                    <TextBlock Text="Sharpness" Width="90" Foreground="#CCC" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding Sharpness, StringFormat='{}{0:0}'}"
+                               Width="42" TextAlignment="Right" Foreground="#AAA"
+                               VerticalAlignment="Center" DockPanel.Dock="Right"/>
+                    <Slider Minimum="0" Maximum="150" Value="{Binding Sharpness}"
+                            TickFrequency="1" IsSnapToTickEnabled="True"/>
+                </DockPanel>
+
+                <!-- Noise Reduction -->
+                <DockPanel Margin="0,2">
+                    <TextBlock Text="Noise Red." Width="90" Foreground="#CCC" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding NoiseReduction, StringFormat='{}{0:0}'}"
+                               Width="42" TextAlignment="Right" Foreground="#AAA"
+                               VerticalAlignment="Center" DockPanel.Dock="Right"/>
+                    <Slider Minimum="0" Maximum="100" Value="{Binding NoiseReduction}"
+                            TickFrequency="1" IsSnapToTickEnabled="True"/>
+                </DockPanel>
+
+                <!-- ======== ACTIONS ======== -->
+                <Border Height="1" Background="#444" Margin="0,16,0,8"/>
+
+                <!-- Undo / Redo -->
+                <Grid Margin="0,2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="4"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Content="Undo (Ctrl+Z)" Command="{Binding UndoCommand}"
+                            Padding="0,6"/>
+                    <Button Grid.Column="2" Content="Redo (Ctrl+Y)" Command="{Binding RedoCommand}"
+                            Padding="0,6"/>
+                </Grid>
+
+                <Button Content="Auto (A)" Command="{Binding AutoAdjustCommand}"
+                        HorizontalAlignment="Stretch" Margin="0,6,0,2" Padding="0,6"
+                        FontWeight="SemiBold"/>
+
+                <Button Content="Auto Tone" Command="{Binding AutoToneCommand}"
+                        HorizontalAlignment="Stretch" Margin="0,2" Padding="0,6"/>
+
+                <Button Content="Reset All (R)" Command="{Binding ResetAllCommand}"
+                        HorizontalAlignment="Stretch" Margin="0,2" Padding="0,6"/>
+
+                <Border Height="1" Background="#444" Margin="0,8,0,8"/>
+
+                <!-- Sidecar -->
+                <Grid Margin="0,2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="4"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Content="Save (Ctrl+S)" Command="{Binding SaveSidecarCommand}"
+                            Padding="0,6"/>
+                    <Button Grid.Column="2" Content="Load Settings" Command="{Binding LoadSidecarCommand}"
+                            Padding="0,6"/>
+                </Grid>
+
+                <!-- Export -->
+                <Button Content="Export (Ctrl+E)" Command="{Binding ExportCommand}"
+                        HorizontalAlignment="Stretch" Margin="0,6,0,2" Padding="0,8"
+                        FontWeight="SemiBold"/>
+
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

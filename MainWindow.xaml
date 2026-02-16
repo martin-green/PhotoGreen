@@ -1,0 +1,135 @@
+﻿<Window x:Class="PhotoGreen.MainWindow"
+xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+xmlns:views="clr-namespace:PhotoGreen.Views"
+mc:Ignorable="d"
+Title="PhotoGreen" Height="700" Width="1200"
+WindowState="Maximized"
+Background="{StaticResource BackgroundBrush}"
+Foreground="{StaticResource ForegroundBrush}">
+
+<Window.InputBindings>
+    <KeyBinding Key="Z" Modifiers="Ctrl" Command="{Binding KeyUndoCommand}"/>
+    <KeyBinding Key="Y" Modifiers="Ctrl" Command="{Binding KeyRedoCommand}"/>
+    <KeyBinding Key="Z" Modifiers="Ctrl+Shift" Command="{Binding KeyRedoCommand}"/>
+    <KeyBinding Key="R" Command="{Binding KeyResetCommand}"/>
+    <KeyBinding Key="A" Command="{Binding KeyAutoCommand}"/>
+    <KeyBinding Key="E" Modifiers="Ctrl" Command="{Binding KeyExportCommand}"/>
+    <KeyBinding Key="S" Modifiers="Ctrl" Command="{Binding KeySaveSidecarCommand}"/>
+    <KeyBinding Key="I" Modifiers="Ctrl" Command="{Binding OpenImportDialogCommand}"/>
+</Window.InputBindings>
+
+<Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="280" MinWidth="200"/>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="300" MinWidth="250"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- File Browser Panel (left) -->
+        <DockPanel Grid.Column="0">
+            <Button DockPanel.Dock="Top" Content="📷 Import from Camera (Ctrl+I)"
+                    Command="{Binding OpenImportDialogCommand}"
+                    Background="#2A4A2A" Foreground="#CCC" BorderBrush="#555"
+                    Padding="8,5" Margin="4,4,4,2" Cursor="Hand"
+                    HorizontalContentAlignment="Center"/>
+            <views:FileBrowserView DataContext="{Binding FileBrowser}"/>
+        </DockPanel>
+
+        <!-- Splitter -->
+        <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Center"
+                      VerticalAlignment="Stretch" Cursor="SizeWE"/>
+
+        <!-- Image Viewer Panel (center) -->
+        <views:ImageViewerView Grid.Column="2" DataContext="{Binding ImageViewer}"/>
+
+        <!-- Splitter -->
+        <GridSplitter Grid.Column="3" Width="5" HorizontalAlignment="Center"
+                      VerticalAlignment="Stretch" Cursor="SizeWE"/>
+
+        <!-- Editing + EXIF Panel (right) -->
+        <Grid Grid.Column="4">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <views:EditingPanelView Grid.Row="0" DataContext="{Binding Editing}"/>
+
+            <Expander Grid.Row="1" Header="EXIF Information" IsExpanded="True"
+                      Foreground="#DDD" Background="#252525" BorderBrush="#444"
+                      Padding="0" Margin="0,1,0,0">
+                <ScrollViewer MaxHeight="280" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled">
+                    <Grid Margin="12,6,12,10" DataContext="{Binding ExifInfo}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="8"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition/><RowDefinition/><RowDefinition/>
+                            <RowDefinition/><RowDefinition/><RowDefinition/>
+                            <RowDefinition/><RowDefinition/><RowDefinition/>
+                            <RowDefinition/><RowDefinition/><RowDefinition/>
+                            <RowDefinition/><RowDefinition/><RowDefinition/>
+                            <RowDefinition/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Camera" Foreground="#999" Margin="0,1"/>
+                        <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding CameraModel, TargetNullValue='-'}" Foreground="#CCC" Margin="0,1"/>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Make" Foreground="#999" Margin="0,1"/>
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding CameraMake, TargetNullValue='-'}" Foreground="#CCC" Margin="0,1"/>
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Lens" Foreground="#999" Margin="0,1"/>
+                        <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding LensModel, TargetNullValue='-'}" Foreground="#CCC" Margin="0,1" TextTrimming="CharacterEllipsis"/>
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Focal" Foreground="#999" Margin="0,1"/>
+                        <TextBlock Grid.Row="3" Grid.Column="2" Text="{Binding FocalLength, TargetNullValue='-'}" Foreground="#CCC" Margin="0,1"/>
+
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Aperture" Foreground="#999" Margin="0,1"/>
+                        <TextBlock Grid.Row="4" Grid.Column="2" Text="{Binding Aperture, TargetNullValue='-'}" Foreground="#CCC" Margin="0,1"/>
+
+                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Shutter" Foreground="#999" Margin="0,1"/>
+                        <TextBlock Grid.Row="5" Grid.Column="2" Text="{Binding ShutterSpeed, TargetNullValue='-'}" Foreground="#CCC" Margin="0,1"/>
+
+                        <TextBlock Grid.Row="6" Grid.Column="0" Text="ISO" Foreground="#999" Margin="0,1"/>
+                        <TextBlock Grid.Row="6" Grid.Column="2" Text="{Binding Iso, TargetNullValue='-'}" Foreground="#CCC" Margin="0,1"/>
+
+                        <TextBlock Grid.Row="7" Grid.Column="0" Text="Exp. Comp" Foreground="#999" Margin="0,1"/>
+                        <TextBlock Grid.Row="7" Grid.Column="2" Text="{Binding ExposureCompensation, TargetNullValue='-'}" Foreground="#CCC" Margin="0,1"/>
+
+                        <TextBlock Grid.Row="8" Grid.Column="0" Text="Metering" Foreground="#999" Margin="0,1"/>
+                        <TextBlock Grid.Row="8" Grid.Column="2" Text="{Binding MeteringMode, TargetNullValue='-'}" Foreground="#CCC" Margin="0,1"/>
+
+                        <TextBlock Grid.Row="9" Grid.Column="0" Text="Flash" Foreground="#999" Margin="0,1"/>
+                        <TextBlock Grid.Row="9" Grid.Column="2" Text="{Binding FlashMode, TargetNullValue='-'}" Foreground="#CCC" Margin="0,1"/>
+
+                        <TextBlock Grid.Row="10" Grid.Column="0" Text="WB" Foreground="#999" Margin="0,1"/>
+                        <TextBlock Grid.Row="10" Grid.Column="2" Text="{Binding WhiteBalance, TargetNullValue='-'}" Foreground="#CCC" Margin="0,1"/>
+
+                        <TextBlock Grid.Row="11" Grid.Column="0" Text="Date" Foreground="#999" Margin="0,1"/>
+                        <TextBlock Grid.Row="11" Grid.Column="2" Text="{Binding DateTaken, TargetNullValue='-'}" Foreground="#CCC" Margin="0,1"/>
+
+                        <TextBlock Grid.Row="12" Grid.Column="0" Text="Size" Foreground="#999" Margin="0,1"/>
+                        <TextBlock Grid.Row="12" Grid.Column="2" Text="{Binding Dimensions, TargetNullValue='-'}" Foreground="#CCC" Margin="0,1"/>
+
+                        <TextBlock Grid.Row="13" Grid.Column="0" Text="File Size" Foreground="#999" Margin="0,1"/>
+                        <TextBlock Grid.Row="13" Grid.Column="2" Text="{Binding FileSize, TargetNullValue='-'}" Foreground="#CCC" Margin="0,1"/>
+
+                        <TextBlock Grid.Row="14" Grid.Column="0" Text="Color" Foreground="#999" Margin="0,1"/>
+                        <TextBlock Grid.Row="14" Grid.Column="2" Text="{Binding ColorSpace, TargetNullValue='-'}" Foreground="#CCC" Margin="0,1"/>
+
+                        <TextBlock Grid.Row="15" Grid.Column="0" Text="Software" Foreground="#999" Margin="0,1"/>
+                        <TextBlock Grid.Row="15" Grid.Column="2" Text="{Binding Software, TargetNullValue='-'}" Foreground="#CCC" Margin="0,1" TextTrimming="CharacterEllipsis"/>
+                    </Grid>
+                </ScrollViewer>
+            </Expander>
+        </Grid>
+    </Grid>
+</Window>
