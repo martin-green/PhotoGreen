@@ -11,6 +11,7 @@
             </ResourceDictionary.MergedDictionaries>
 
             <converters:BoolToVisibilityConverter x:Key="BoolToVisConverter"/>
+            <converters:EnumBoolConverter x:Key="EnumBoolConverter"/>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

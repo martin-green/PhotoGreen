@@ -179,6 +179,9 @@
                         HorizontalAlignment="Stretch" Margin="0,6,0,2" Padding="0,6"
                         FontWeight="SemiBold"/>
 
+                <CheckBox Content="🤖 AI-Assisted Auto" IsChecked="{Binding IsAIAutoEnabled}"
+                          Foreground="#AAA" Margin="0,2,0,0"/>
+
                 <Button Content="Auto Tone" Command="{Binding AutoToneCommand}"
                         HorizontalAlignment="Stretch" Margin="0,2" Padding="0,6"/>
 

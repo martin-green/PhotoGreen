@@ -12,6 +12,10 @@ public partial class MainViewModel : ObservableObject
     public FileBrowserViewModel FileBrowser { get; } = new();
     public ImageViewerViewModel ImageViewer { get; } = new();
     public EditingViewModel Editing { get; } = new();
+    public LibraryViewModel Library { get; } = new();
+
+    [ObservableProperty]
+    private int _selectedTabIndex;
 
     [ObservableProperty]
     private ExifInfo _exifInfo = ExifInfo.Empty;
@@ -42,6 +46,25 @@ public partial class MainViewModel : ObservableObject
             var r = ImageViewer.SelectionRect;
             return (r.X, r.Y, r.Width, r.Height);
         };
+
+        Editing.ThumbnailBytesProvider = () =>
+        {
+            var group = ImageViewer.CurrentGroup;
+            if (group == null) return null;
+            try
+            {
+                using var image = new ImageMagick.MagickImage(group.PrimaryFile.FullPath);
+                image.AutoOrient();
+                image.Resize(new ImageMagick.MagickGeometry(512, 512) { Greater = true });
+                image.Format = ImageMagick.MagickFormat.Jpeg;
+                image.Quality = 80;
+                return image.ToByteArray();
+            }
+            catch { return null; }
+        };
+
+        // Library → Edit integration
+        Library.OpenInEditorRequested += OnOpenInEditorRequested;
     }
 
     private void OnEditingPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -173,5 +196,27 @@ public partial class MainViewModel : ObservableObject
         }
 
         window.Show();
+    }
+
+    private void OnOpenInEditorRequested(string fullPath)
+    {
+        var folder = Path.GetDirectoryName(fullPath);
+        if (string.IsNullOrEmpty(folder))
+            return;
+
+        // Navigate the file browser to the image's folder
+        FileBrowser.NavigateToDirectoryCommand.Execute(folder);
+
+        // Find and select the matching image group
+        var fileName = Path.GetFileNameWithoutExtension(fullPath);
+        var group = FileBrowser.ImageGroups
+            .FirstOrDefault(g => string.Equals(g.Stem, fileName, StringComparison.OrdinalIgnoreCase));
+        if (group != null)
+        {
+            FileBrowser.SelectedGroup = group;
+        }
+
+        // Switch to Edit tab
+        SelectedTabIndex = 0;
     }
 }

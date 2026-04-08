@@ -275,8 +275,19 @@ public partial class EditingViewModel : ObservableObject
     /// </summary>
     public Func<(int x, int y, int w, int h)?>? SelectionProvider { get; set; }
 
+    /// <summary>
+    /// Provides a JPEG thumbnail for AI scene classification.
+    /// Set by MainViewModel. Returns null if no image is loaded.
+    /// </summary>
+    public Func<byte[]?>? ThumbnailBytesProvider { get; set; }
+
+    [ObservableProperty]
+    private bool _isAIAutoEnabled;
+
+    private readonly AIService _aiService = new();
+
     [RelayCommand]
-    private void AutoAdjust()
+    private async Task AutoAdjust()
     {
         var data = LinearPixelProvider?.Invoke();
         if (data == null)
@@ -284,11 +295,25 @@ public partial class EditingViewModel : ObservableObject
 
         var (pixels, width, height) = data.Value;
 
+        SceneHint? sceneHint = null;
+
+        // AI-assisted scene classification
+        if (IsAIAutoEnabled && _aiService.IsAvailable)
+        {
+            var thumbBytes = ThumbnailBytesProvider?.Invoke();
+            if (thumbBytes != null)
+            {
+                var sceneType = await _aiService.ClassifySceneAsync(thumbBytes);
+                if (sceneType != SceneType.Unknown)
+                    sceneHint = SceneHint.FromSceneType(sceneType);
+            }
+        }
+
         // Use region if selected, otherwise center-weighted full image
         var sel = SelectionProvider?.Invoke();
         var settings = sel != null
-            ? AutoAdjustEngine.AnalyzeRegion(pixels, width, height, sel.Value.x, sel.Value.y, sel.Value.w, sel.Value.h)
-            : AutoAdjustEngine.Analyze(pixels, width, height);
+            ? AutoAdjustEngine.AnalyzeRegion(pixels, width, height, sel.Value.x, sel.Value.y, sel.Value.w, sel.Value.h, sceneHint)
+            : AutoAdjustEngine.Analyze(pixels, width, height, sceneHint);
 
         ApplySettings(settings);
     }

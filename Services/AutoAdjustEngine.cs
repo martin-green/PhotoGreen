@@ -27,6 +27,12 @@ public static class AutoAdjustEngine
         return AnalyzeWeighted(linearPixels, width, height, 0, 0, width, height, useCenter: true);
     }
 
+    public static DevelopSettings Analyze(ushort[] linearPixels, int width, int height, SceneHint? sceneHint)
+    {
+        var settings = Analyze(linearPixels, width, height);
+        return ApplySceneHint(settings, sceneHint);
+    }
+
     public static DevelopSettings AnalyzeRegion(ushort[] linearPixels, int width, int height,
         int rx, int ry, int rw, int rh)
     {
@@ -35,6 +41,28 @@ public static class AutoAdjustEngine
         rw = Math.Clamp(rw, 1, width - rx);
         rh = Math.Clamp(rh, 1, height - ry);
         return AnalyzeWeighted(linearPixels, width, height, rx, ry, rw, rh, useCenter: false);
+    }
+
+    public static DevelopSettings AnalyzeRegion(ushort[] linearPixels, int width, int height,
+        int rx, int ry, int rw, int rh, SceneHint? sceneHint)
+    {
+        var settings = AnalyzeRegion(linearPixels, width, height, rx, ry, rw, rh);
+        return ApplySceneHint(settings, sceneHint);
+    }
+
+    private static DevelopSettings ApplySceneHint(DevelopSettings settings, SceneHint? hint)
+    {
+        if (hint == null || hint.SceneType == SceneType.Unknown)
+            return settings;
+
+        return settings with
+        {
+            Exposure = Math.Clamp(settings.Exposure + hint.ExposureBias, -5.0, 5.0),
+            Contrast = Math.Clamp(settings.Contrast + hint.ContrastBias, -100, 100),
+            Temperature = Math.Clamp(settings.Temperature + hint.TemperatureBias, 2000, 10000),
+            Saturation = Math.Clamp(settings.Saturation + hint.SaturationBias, -100, 100),
+            Shadows = Math.Clamp(settings.Shadows + hint.ShadowBias, -100, 100)
+        };
     }
 
     private static DevelopSettings AnalyzeWeighted(ushort[] linearPixels, int stride, int totalHeight,

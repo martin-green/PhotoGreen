@@ -49,7 +49,8 @@ public class ThumbnailService
     {
         try
         {
-            using var image = new MagickImage(filePath);
+            using var image = new MagickImage();
+            image.Ping(filePath);
             var exifProfile = image.GetExifProfile();
             var thumbnailBytes = exifProfile?.CreateThumbnail()?.ToByteArray();
 
@@ -74,10 +75,34 @@ public class ThumbnailService
         }
     }
 
+    private static readonly HashSet<string> JpegExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".jpg", ".jpeg"
+    };
+
     private static BitmapSource? LoadAndResizeThumbnail(string filePath)
     {
         try
         {
+            // For JPEG files, WPF's built-in decoder with DecodePixelHeight is much
+            // faster than roundtripping through ImageMagick.
+            if (JpegExtensions.Contains(Path.GetExtension(filePath)))
+            {
+                var bitmap = new BitmapImage();
+                using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    bitmap.BeginInit();
+                    bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                    bitmap.DecodePixelHeight = ThumbnailSize;
+                    bitmap.StreamSource = fs;
+                    bitmap.EndInit();
+                }
+                bitmap.Freeze();
+                return bitmap;
+            }
+
+            // For RAW/TIFF/PNG: use ImageMagick with size hints and BMP output
+            // (BMP avoids the costly PNG compression step)
             var settings = new MagickReadSettings
             {
                 Width = ThumbnailSize * 2,
@@ -87,19 +112,19 @@ public class ThumbnailService
             using var image = new MagickImage(filePath, settings);
             image.Thumbnail((uint)ThumbnailSize, (uint)ThumbnailSize);
 
-            var bitmap = new BitmapImage();
+            var bmp = new BitmapImage();
             using (var ms = new MemoryStream())
             {
-                image.Write(ms, MagickFormat.Png);
+                image.Write(ms, MagickFormat.Bmp);
                 ms.Position = 0;
 
-                bitmap.BeginInit();
-                bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                bitmap.StreamSource = ms;
-                bitmap.EndInit();
+                bmp.BeginInit();
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.StreamSource = ms;
+                bmp.EndInit();
             }
-            bitmap.Freeze();
-            return bitmap;
+            bmp.Freeze();
+            return bmp;
         }
         catch
         {

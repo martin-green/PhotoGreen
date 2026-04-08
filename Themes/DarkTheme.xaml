@@ -284,4 +284,71 @@
         <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
     </Style>
 
+    <!-- Main TabControl (top-level Edit / Library tabs) -->
+    <Style x:Key="MainTabControlStyle" TargetType="TabControl">
+        <Setter Property="Background" Value="{StaticResource BackgroundBrush}"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Padding" Value="0"/>
+    </Style>
+
+    <Style x:Key="MainTabItemStyle" TargetType="TabItem">
+        <Setter Property="Foreground" Value="#BBB"/>
+        <Setter Property="Background" Value="#2D2D2D"/>
+        <Setter Property="Padding" Value="20,10"/>
+        <Setter Property="FontSize" Value="15"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TabItem">
+                    <Border x:Name="TabBorder" Background="{TemplateBinding Background}"
+                            Padding="{TemplateBinding Padding}"
+                            BorderBrush="#555" BorderThickness="0,0,1,1">
+                        <ContentPresenter ContentSource="Header"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter Property="Foreground" Value="#FFF"/>
+                            <Setter TargetName="TabBorder" Property="Background" Value="#1E1E1E"/>
+                            <Setter TargetName="TabBorder" Property="BorderThickness" Value="0,3,1,0"/>
+                            <Setter TargetName="TabBorder" Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Foreground" Value="#EEE"/>
+                            <Setter TargetName="TabBorder" Property="Background" Value="#3A3A3A"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- RadioButton -->
+    <Style TargetType="RadioButton">
+        <Setter Property="Foreground" Value="{StaticResource ForegroundBrush}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <StackPanel Orientation="Horizontal">
+                        <Border Width="14" Height="14" CornerRadius="7" BorderThickness="1"
+                                BorderBrush="{StaticResource BorderBrush}"
+                                Background="{StaticResource SurfaceBrush}"
+                                VerticalAlignment="Center">
+                            <Ellipse x:Name="RadioDot" Width="8" Height="8"
+                                     Fill="{StaticResource AccentBrush}"
+                                     HorizontalAlignment="Center" VerticalAlignment="Center"
+                                     Visibility="Collapsed"/>
+                        </Border>
+                        <ContentPresenter Margin="6,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="RadioDot" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
 </ResourceDictionary>
