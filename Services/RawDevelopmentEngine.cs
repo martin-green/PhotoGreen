@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -31,64 +32,79 @@ public class RawDevelopmentEngine
         double satMul = 1.0 + settings.Saturation / 100.0;
         double vibAmount = settings.Vibrance / 100.0;
 
-        // Process pixels in parallel by scanline
-        Parallel.For(0, height, y =>
+        // Steps 2-4 (white balance -> exposure -> clamp -> tone curve) depend only on the
+        // 16-bit input value, so they collapse into one lookup table per channel. This
+        // removes two multiplies, a clamp and a float->int conversion per channel per pixel.
+        var stageR = BuildChannelLut(toneLut, wbR * exposureMul);
+        var stageG = BuildChannelLut(toneLut, wbG * exposureMul);
+        var stageB = BuildChannelLut(toneLut, wbB * exposureMul);
+
+        // When vibrance is off the saturation factor is the same constant for every pixel,
+        // so the per-pixel min/max and the divide in the vibrance term are not needed.
+        bool hasVibrance = vibAmount != 0.0;
+
+        // With neutral saturation and vibrance, step 5 reduces to r = lum + (r - lum) * 1,
+        // i.e. the identity. The whole pipeline then becomes a single byte lookup per
+        // channel, so fuse the gamma step into the tables as well.
+        bool isIdentitySaturation = !hasVibrance && satMul == 1.0;
+
+        if (isIdentitySaturation)
         {
-            for (int x = 0; x < width; x++)
+            var byteR = BuildGammaFusedLut(stageR);
+            var byteG = BuildGammaFusedLut(stageG);
+            var byteB = BuildGammaFusedLut(stageB);
+
+            Parallel.For(0, height, y =>
             {
-                int srcIdx = (y * width + x) * 3;
-                int dstIdx = (y * width + x) * 3;
+                var src = linearPixels.AsSpan(y * width * 3, width * 3);
+                var dst = output.AsSpan(y * width * 3, width * 3);
 
-                // 1. Read linear 16-bit
-                double r = linearPixels[srcIdx];
-                double g = linearPixels[srcIdx + 1];
-                double b = linearPixels[srcIdx + 2];
+                for (int i = 0; i + 2 < src.Length; i += 3)
+                {
+                    dst[i] = byteR[src[i]];
+                    dst[i + 1] = byteG[src[i + 1]];
+                    dst[i + 2] = byteB[src[i + 2]];
+                }
+            });
+        }
+        else
+        {
+            Parallel.For(0, height, y =>
+            {
+                var src = linearPixels.AsSpan(y * width * 3, width * 3);
+                var dst = output.AsSpan(y * width * 3, width * 3);
 
-                // 2. White balance (channel multiply)
-                r *= wbR;
-                g *= wbG;
-                b *= wbB;
+                for (int i = 0; i + 2 < src.Length; i += 3)
+                {
+                    // 1-4. Fused white balance, exposure and tone curve
+                    double r = stageR[src[i]];
+                    double g = stageG[src[i + 1]];
+                    double b = stageB[src[i + 2]];
 
-                // 3. Exposure (EV multiply)
-                r *= exposureMul;
-                g *= exposureMul;
-                b *= exposureMul;
+                    // 5. Saturation & Vibrance (in linear space before gamma)
+                    double lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
 
-                // Clamp to 16-bit range
-                r = Math.Clamp(r, 0, 65535);
-                g = Math.Clamp(g, 0, 65535);
-                b = Math.Clamp(b, 0, 65535);
+                    double totalSat = satMul;
+                    if (hasVibrance)
+                    {
+                        // Vibrance: adaptive saturation - boost less-saturated colors more
+                        double maxC = Math.Max(r, Math.Max(g, b));
+                        double minC = Math.Min(r, Math.Min(g, b));
+                        double currentSat = maxC > 0 ? (maxC - minC) / maxC : 0;
+                        totalSat *= 1.0 + vibAmount * (1.0 - currentSat);
+                    }
 
-                // 4. Tone curve LUT (highlights, shadows, contrast, whites, blacks)
-                r = toneLut[(int)r];
-                g = toneLut[(int)g];
-                b = toneLut[(int)b];
+                    r = lum + (r - lum) * totalSat;
+                    g = lum + (g - lum) * totalSat;
+                    b = lum + (b - lum) * totalSat;
 
-                // 5. Saturation & Vibrance (in linear space before gamma)
-                double lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-
-                // Vibrance: adaptive saturation - boost less-saturated colors more
-                double maxC = Math.Max(r, Math.Max(g, b));
-                double minC = Math.Min(r, Math.Min(g, b));
-                double currentSat = maxC > 0 ? (maxC - minC) / maxC : 0;
-                double vibSat = 1.0 + vibAmount * (1.0 - currentSat);
-
-                double totalSat = satMul * vibSat;
-
-                r = lum + (r - lum) * totalSat;
-                g = lum + (g - lum) * totalSat;
-                b = lum + (b - lum) * totalSat;
-
-                r = Math.Clamp(r, 0, 65535);
-                g = Math.Clamp(g, 0, 65535);
-                b = Math.Clamp(b, 0, 65535);
-
-                // 6. Linear ? sRGB gamma
-                output[dstIdx] = LinearToSrgb(r / 65535.0);
-                output[dstIdx + 1] = LinearToSrgb(g / 65535.0);
-                output[dstIdx + 2] = LinearToSrgb(b / 65535.0);
-            }
-        });
+                    // 6. Linear -> sRGB gamma
+                    dst[i] = LinearToSrgb(r * (1.0 / 65535.0));
+                    dst[i + 1] = LinearToSrgb(g * (1.0 / 65535.0));
+                    dst[i + 2] = LinearToSrgb(b * (1.0 / 65535.0));
+                }
+            });
+        }
 
         // 7. Sharpening (unsharp mask on the 8-bit result)
         if (settings.Sharpness > 0)
@@ -204,6 +220,37 @@ public class RawDevelopmentEngine
 
     #region White Balance
 
+    /// <summary>
+    /// Folds the per-channel white balance and exposure multiplier into the tone curve,
+    /// producing a direct 16-bit input -> 16-bit toned output table.
+    /// </summary>
+    private static ushort[] BuildChannelLut(ushort[] toneLut, double multiplier)
+    {
+        var lut = new ushort[LutSize];
+        for (int i = 0; i < LutSize; i++)
+        {
+            // Matches the original per-pixel order: scale, clamp to 16-bit, then tone curve.
+            var scaled = (int)Math.Clamp(i * multiplier, 0, 65535);
+            lut[i] = toneLut[scaled];
+        }
+        return lut;
+    }
+
+    /// <summary>
+    /// Collapses a 16-bit channel table and the sRGB gamma step into a single
+    /// 16-bit input -> 8-bit output table. Only valid when saturation and vibrance
+    /// are neutral, since those depend on all three channels together.
+    /// </summary>
+    private static byte[] BuildGammaFusedLut(ushort[] channelLut)
+    {
+        var lut = new byte[LutSize];
+        for (int i = 0; i < LutSize; i++)
+        {
+            lut[i] = LinearToSrgb(channelLut[i] * (1.0 / 65535.0));
+        }
+        return lut;
+    }
+
     private static (double r, double g, double b) ComputeWhiteBalanceMultipliers(double tempK, double tint)
     {
         // Compute relative shift from D55 (5500K) daylight reference
@@ -255,42 +302,99 @@ public class RawDevelopmentEngine
     private static void ApplyUnsharpMask(byte[] pixels, int width, int height, double amount)
     {
         // Simple 3×3 box-blur based unsharp mask
+        // Unsharp mask built on a separable 3x3 box blur. Needs a full 3x3 neighbourhood,
+        // so a sliver of an image has no interior to sharpen.
+        if (width < 3 || height < 3)
+            return;
+
         double strength = amount / 100.0;
         var blurred = new byte[pixels.Length];
 
-        // Box blur (luminance-aware on each channel)
-        Parallel.For(1, height - 1, y =>
-        {
-            for (int x = 1; x < width - 1; x++)
-            {
-                for (int c = 0; c < 3; c++)
-                {
-                    int sum = 0;
-                    for (int dy = -1; dy <= 1; dy++)
-                    {
-                        for (int dx = -1; dx <= 1; dx++)
-                        {
-                            sum += pixels[((y + dy) * width + (x + dx)) * 3 + c];
-                        }
-                    }
-                    blurred[(y * width + x) * 3 + c] = (byte)(sum / 9);
-                }
-            }
-        });
+        BoxBlur3x3(pixels, blurred, width, height);
 
-        // Apply: sharpened = original + strength * (original - blurred)
+        // Apply: sharpened = original + strength * (original - blurred).
+        // Done in 16.16 fixed point to keep the inner loop off the FPU.
+        int strengthFixed = (int)Math.Round(strength * 65536.0);
+
         Parallel.For(1, height - 1, y =>
         {
-            for (int x = 1; x < width - 1; x++)
+            int rowStart = y * width * 3;
+            // Interior pixels only, matching the blurred region produced above.
+            int from = rowStart + 3;
+            int to = rowStart + (width - 1) * 3;
+
+            for (int idx = from; idx < to; idx++)
             {
-                for (int c = 0; c < 3; c++)
-                {
-                    int idx = (y * width + x) * 3 + c;
-                    double val = pixels[idx] + strength * (pixels[idx] - blurred[idx]);
-                    pixels[idx] = (byte)Math.Clamp(val, 0, 255);
-                }
+                int original = pixels[idx];
+                int delta = original - blurred[idx];
+                // Adding half a unit before the arithmetic shift rounds to nearest,
+                // matching the intent of the original floating-point expression.
+                int val = original + ((delta * strengthFixed + 32768) >> 16);
+                pixels[idx] = (byte)Math.Clamp(val, 0, 255);
             }
         });
+    }
+
+    /// <summary>
+    /// Separable 3x3 box blur writing the interior pixels of <paramref name="destination"/>.
+    /// </summary>
+    /// <remarks>
+    /// The naive form reads 9 source bytes per channel per pixel. Separating it into a
+    /// horizontal pass feeding a vertical pass means each row's horizontal sums are
+    /// computed once and reused by the three output rows that need them, via a three-row
+    /// ring buffer. Extra memory stays proportional to the row width, not the image.
+    /// </remarks>
+    private static void BoxBlur3x3(byte[] source, byte[] destination, int width, int height)
+    {
+        int stride = width * 3;
+
+        Parallel.ForEach(
+            Partitioner.Create(1, height - 1),
+            () => new ushort[3][],
+            (range, _, ring) =>
+            {
+                ring[0] ??= new ushort[stride];
+                ring[1] ??= new ushort[stride];
+                ring[2] ??= new ushort[stride];
+
+                int first = range.Item1;
+
+                // Prime the ring with the row above the first output row.
+                HorizontalSums(source, ring[(first - 1) % 3], first - 1, stride);
+                HorizontalSums(source, ring[first % 3], first, stride);
+
+                for (int y = first; y < range.Item2; y++)
+                {
+                    HorizontalSums(source, ring[(y + 1) % 3], y + 1, stride);
+
+                    var above = ring[(y - 1) % 3];
+                    var middle = ring[y % 3];
+                    var below = ring[(y + 1) % 3];
+
+                    int rowStart = y * stride;
+                    for (int i = 3; i < stride - 3; i++)
+                    {
+                        destination[rowStart + i] = (byte)((above[i] + middle[i] + below[i]) / 9);
+                    }
+                }
+
+                return ring;
+            },
+            _ => { });
+    }
+
+    /// <summary>
+    /// Fills <paramref name="sums"/> with the horizontal 3-tap sum for one row. Entries
+    /// for the first and last pixel of the row are left at zero and are never read.
+    /// </summary>
+    private static void HorizontalSums(byte[] source, ushort[] sums, int y, int stride)
+    {
+        var row = source.AsSpan(y * stride, stride);
+
+        for (int i = 3; i < stride - 3; i++)
+        {
+            sums[i] = (ushort)(row[i - 3] + row[i] + row[i + 3]);
+        }
     }
 
     #endregion
@@ -298,35 +402,7 @@ public class RawDevelopmentEngine
     #region Histogram
 
     private static HistogramData ComputeHistogramFromOutput(byte[] output, int pixelCount)
-    {
-        var data = new HistogramData();
-        for (int i = 0; i < pixelCount; i++)
-        {
-            int idx = i * 3;
-            int r = output[idx];
-            int g = output[idx + 1];
-            int b = output[idx + 2];
-
-            data.Red[r]++;
-            data.Green[g]++;
-            data.Blue[b]++;
-
-            int lum = (int)(0.2126 * r + 0.7152 * g + 0.0722 * b);
-            lum = Math.Clamp(lum, 0, 255);
-            data.Luminance[lum]++;
-        }
-
-        int max = 0;
-        for (int i = 1; i < HistogramData.BinCount - 1; i++)
-        {
-            max = Math.Max(max, data.Red[i]);
-            max = Math.Max(max, data.Green[i]);
-            max = Math.Max(max, data.Blue[i]);
-        }
-        data.MaxCount = Math.Max(max, 1);
-
-        return data;
-    }
+        => HistogramData.FromBytes(output, pixelCount);
 
     #endregion
 }

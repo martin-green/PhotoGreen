@@ -284,7 +284,7 @@ public partial class EditingViewModel : ObservableObject
     [ObservableProperty]
     private bool _isAIAutoEnabled;
 
-    private readonly AIService _aiService = new();
+    private readonly AIService _aiService = AIService.FromSettings(AppSettingsService.Instance);
 
     [RelayCommand]
     private async Task AutoAdjust()

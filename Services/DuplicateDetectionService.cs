@@ -32,6 +32,17 @@ public class DuplicateDetectionService
     public static ulong ComputePerceptualHash(string filePath)
     {
         using var image = new MagickImage(filePath);
+        return ComputePerceptualHash(image);
+    }
+
+    /// <summary>
+    /// Computes the perceptual hash from an already-decoded image. The caller keeps
+    /// ownership of <paramref name="source"/>; this works on a private clone so the
+    /// source is left untouched and a single decode can feed several consumers.
+    /// </summary>
+    public static ulong ComputePerceptualHash(IMagickImage<ushort> source)
+    {
+        using var image = source.Clone();
         image.AutoOrient();
         image.Resize(new MagickGeometry(HashSize, HashSize) { IgnoreAspectRatio = true });
         image.ColorSpace = ColorSpace.Gray;

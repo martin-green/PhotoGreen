@@ -11,7 +11,7 @@ namespace PhotoGreen.ViewModels;
 public partial class CameraImportViewModel : ObservableObject
 {
     private readonly CameraImportService _importService = new();
-    private readonly AppSettingsService _settingsService = new();
+    private readonly AppSettingsService _settingsService = AppSettingsService.Instance;
     private CancellationTokenSource? _importCts;
 
     public ObservableCollection<PhotoImportSourceItem> Sources { get; } = [];
@@ -46,6 +46,12 @@ public partial class CameraImportViewModel : ObservableObject
 
     public event Action<string>? ImportCompleted;
 
+    /// <summary>
+    /// Raised when a connected camera triggers an automatic import, so the shell can
+    /// bring the import UI up and show progress.
+    /// </summary>
+    public event Action? AutoImportStarted;
+
     public CameraImportViewModel()
     {
         DestinationFolder = _settingsService.Settings.ImportDestinationFolder;
@@ -65,18 +71,11 @@ public partial class CameraImportViewModel : ObservableObject
 
         _importService.SourceConnected += source =>
         {
-            System.Windows.Application.Current.Dispatcher.Invoke(async () =>
-            {
-                Sources.Clear();
-                Sources.Add(new PhotoImportSourceItem(source));
-                SelectedSource = Sources[0];
-                StatusText = $"Camera connected: {source.DisplayName}";
-
-                if (AutoImportOnConnect && !string.IsNullOrEmpty(DestinationFolder))
-                {
-                    await ImportFromCameraAsync();
-                }
-            });
+            // InvokeAsync + Unwrap so the async work is actually observed instead of
+            // being fire-and-forget "async void" from the dispatcher's point of view.
+            _ = System.Windows.Application.Current.Dispatcher
+                .InvokeAsync(() => HandleSourceConnectedAsync(source))
+                .Task.Unwrap();
         };
 
         _importService.SourceDisconnected += () =>
@@ -90,6 +89,42 @@ public partial class CameraImportViewModel : ObservableObject
         };
 
         _importService.StartWatching();
+    }
+
+    private async Task HandleSourceConnectedAsync(PhotoImportSource source)
+    {
+        try
+        {
+            // A single camera can raise several device-added events (one per
+            // interface), so ignore connects while an import is already running.
+            if (IsImporting)
+                return;
+
+            Sources.Clear();
+            Sources.Add(new PhotoImportSourceItem(source));
+            SelectedSource = Sources[0];
+            StatusText = $"Camera connected: {source.DisplayName}";
+
+            if (!AutoImportOnConnect)
+                return;
+
+            if (string.IsNullOrEmpty(DestinationFolder))
+            {
+                StatusText = "Camera connected, but no import destination folder is configured.";
+                return;
+            }
+
+            AutoImportStarted?.Invoke();
+            await ImportFromCameraAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            StatusText = "Import cancelled.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Auto-import error: {ex.Message}";
+        }
     }
 
     partial void OnFolderPatternChanged(string value)

@@ -14,6 +14,14 @@ public partial class MainViewModel : ObservableObject
     public EditingViewModel Editing { get; } = new();
     public LibraryViewModel Library { get; } = new();
 
+    /// <summary>
+    /// Owned by the shell rather than by the import window so that camera connections
+    /// are detected for the whole application lifetime, not only while the dialog is open.
+    /// </summary>
+    public CameraImportViewModel CameraImport { get; } = new();
+
+    private Views.CameraImportWindow? _importWindow;
+
     [ObservableProperty]
     private int _selectedTabIndex;
 
@@ -25,6 +33,23 @@ public partial class MainViewModel : ObservableObject
         FileBrowser.ImageSelected += OnImageSelected;
         Editing.SettingsChanged += OnSettingsChanged;
         Editing.ExportRequested += OnExportRequested;
+
+        // Bring the import UI up so the user can watch progress when a connected
+        // camera kicks off an automatic import.
+        CameraImport.AutoImportStarted += () =>
+            System.Windows.Application.Current.Dispatcher.Invoke(ShowImportWindow);
+
+        CameraImport.ImportCompleted += folder =>
+        {
+            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+            {
+                FileBrowser.NavigateToDirectoryCommand.Execute(folder);
+                if (FileBrowser.ImageGroups.Count > 0)
+                {
+                    FileBrowser.SelectedGroup = FileBrowser.ImageGroups[0];
+                }
+            });
+        };
 
         Editing.PropertyChanged += OnEditingPropertyChanged;
 
@@ -173,29 +198,26 @@ public partial class MainViewModel : ObservableObject
     private void KeySaveSidecar() => Editing.SaveSidecarCommand.Execute(null);
 
     [RelayCommand]
-    private void OpenImportDialog()
+    private void OpenImportDialog() => ShowImportWindow();
+
+    private void ShowImportWindow()
     {
-        var window = new Views.CameraImportWindow
+        if (_importWindow is { IsLoaded: true })
+        {
+            if (_importWindow.WindowState == System.Windows.WindowState.Minimized)
+                _importWindow.WindowState = System.Windows.WindowState.Normal;
+
+            _importWindow.Activate();
+            return;
+        }
+
+        _importWindow = new Views.CameraImportWindow(CameraImport)
         {
             Owner = System.Windows.Application.Current.MainWindow
         };
 
-        if (window.DataContext is CameraImportViewModel importVm)
-        {
-            importVm.ImportCompleted += folder =>
-            {
-                System.Windows.Application.Current.Dispatcher.Invoke(() =>
-                {
-                    FileBrowser.NavigateToDirectoryCommand.Execute(folder);
-                    if (FileBrowser.ImageGroups.Count > 0)
-                    {
-                        FileBrowser.SelectedGroup = FileBrowser.ImageGroups[0];
-                    }
-                });
-            };
-        }
-
-        window.Show();
+        _importWindow.Closed += (_, _) => _importWindow = null;
+        _importWindow.Show();
     }
 
     private void OnOpenInEditorRequested(string fullPath)

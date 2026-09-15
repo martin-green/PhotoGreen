@@ -8,14 +8,20 @@
     <UseWPF>true</UseWPF>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <ApplicationIcon>Assets\PhotoGreen.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Also embedded as a resource so windows can reference it via pack:// URIs. -->
+    <Resource Include="Assets\PhotoGreen.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
-    <PackageReference Include="Magick.NET-Q16-AnyCPU" Version="14.11.1" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0-preview.5.25277.114" />
-    <PackageReference Include="OllamaSharp" Version="5.4.25" />
-    <PackageReference Include="Microsoft.Extensions.AI" Version="10.4.1" />
+    <PackageReference Include="Magick.NET-Q16-AnyCPU" Version="14.17.1" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
+    <PackageReference Include="OllamaSharp" Version="5.4.30" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.10.0" />
   </ItemGroup>
 
 </Project>

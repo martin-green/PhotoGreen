@@ -35,14 +35,35 @@
             <!-- Group By -->
             <StackPanel Grid.Row="2" Margin="8,4">
                 <TextBlock Text="Group by" FontWeight="Bold" Foreground="#DDD" Margin="0,0,0,4"/>
-                <RadioButton Content="📂 Folder" Foreground="#CCC" Margin="0,2"
+                <RadioButton GroupName="GroupMode" Content="📂 Folder" Foreground="#CCC" Margin="0,2"
                              IsChecked="{Binding GroupMode, Converter={StaticResource EnumBoolConverter}, ConverterParameter={x:Static models:LibraryGroupMode.Folder}}"/>
-                <RadioButton Content="👤 Faces" Foreground="#CCC" Margin="0,2"
+                <RadioButton GroupName="GroupMode" Content="👤 Faces" Foreground="#CCC" Margin="0,2"
                              IsChecked="{Binding GroupMode, Converter={StaticResource EnumBoolConverter}, ConverterParameter={x:Static models:LibraryGroupMode.Faces}}"/>
-                <RadioButton Content="📋 Duplicates" Foreground="#CCC" Margin="0,2"
+                <RadioButton GroupName="GroupMode" Content="📋 Duplicates" Foreground="#CCC" Margin="0,2"
                              IsChecked="{Binding GroupMode, Converter={StaticResource EnumBoolConverter}, ConverterParameter={x:Static models:LibraryGroupMode.Duplicates}}"/>
-                <RadioButton Content="🏷️ Tags" Foreground="#CCC" Margin="0,2"
+                <RadioButton GroupName="GroupMode" Content="🏷️ Tags" Foreground="#CCC" Margin="0,2"
                              IsChecked="{Binding GroupMode, Converter={StaticResource EnumBoolConverter}, ConverterParameter={x:Static models:LibraryGroupMode.Tags}}"/>
+
+                <Border Height="1" Background="#444" Margin="0,8"/>
+
+                <!-- Sort By -->
+                <TextBlock Text="Sort by" FontWeight="Bold" Foreground="#DDD" Margin="0,0,0,4"/>
+                <RadioButton GroupName="SortMode" Content="Name (A–Z)" Foreground="#CCC" Margin="0,2"
+                             IsChecked="{Binding SortMode, Converter={StaticResource EnumBoolConverter}, ConverterParameter={x:Static models:LibrarySortMode.NameAscending}}"/>
+                <RadioButton GroupName="SortMode" Content="Name (Z–A)" Foreground="#CCC" Margin="0,2"
+                             IsChecked="{Binding SortMode, Converter={StaticResource EnumBoolConverter}, ConverterParameter={x:Static models:LibrarySortMode.NameDescending}}"/>
+                <RadioButton GroupName="SortMode" Content="Date (newest first)" Foreground="#CCC" Margin="0,2"
+                             IsChecked="{Binding SortMode, Converter={StaticResource EnumBoolConverter}, ConverterParameter={x:Static models:LibrarySortMode.DateNewest}}"/>
+                <RadioButton GroupName="SortMode" Content="Date (oldest first)" Foreground="#CCC" Margin="0,2"
+                             IsChecked="{Binding SortMode, Converter={StaticResource EnumBoolConverter}, ConverterParameter={x:Static models:LibrarySortMode.DateOldest}}"/>
+
+                <Border Height="1" Background="#444" Margin="0,8"/>
+
+                <!-- Filter -->
+                <TextBlock Text="Filter file name" FontWeight="Bold" Foreground="#DDD" Margin="0,0,0,4"/>
+                <TextBox Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged, Delay=300}"
+                         Background="#1E1E1E" Foreground="#CCC" BorderBrush="#444"
+                         Padding="2" Margin="0,0,0,2"/>
             </StackPanel>
 
             <Border Grid.Row="3" Height="1" Background="#444" Margin="8,4"/>
@@ -66,20 +87,51 @@
                            TextTrimming="CharacterEllipsis" Margin="0,4"/>
 
                 <!-- AI Status -->
-                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                    <TextBlock Text="🤖 AI:" Foreground="#999" Margin="0,0,4,0"/>
-                    <TextBlock Foreground="#999">
-                        <TextBlock.Style>
-                            <Style TargetType="TextBlock">
-                                <Setter Property="Text" Value="🔴 Unavailable"/>
+                <StackPanel Margin="0,8,0,0">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🤖 AI:" Foreground="#999" Margin="0,0,4,0"/>
+                        <TextBlock>
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <!-- Foreground must be set here, not as a local value on the
+                                         element, or it would take precedence over the trigger. -->
+                                    <Setter Property="Text" Value="🔴 Unavailable"/>
+                                    <Setter Property="Foreground" Value="#E05252"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding AiAvailable}" Value="True">
+                                            <Setter Property="Text" Value="🟢 Connected"/>
+                                            <Setter Property="Foreground" Value="#4CAF50"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding IsStartingAi}" Value="True">
+                                            <Setter Property="Text" Value="🟡 Starting..."/>
+                                            <Setter Property="Foreground" Value="#E0A030"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StackPanel>
+
+                    <TextBlock Text="{Binding AiStatusText}" Foreground="#777" FontSize="10"
+                               TextTrimming="CharacterEllipsis" Margin="0,2,0,0"
+                               ToolTip="{Binding AiStatusText}"/>
+
+                    <Button Content="Start Ollama"
+                            Command="{Binding StartAiCommand}"
+                            Margin="0,4,0,0" Padding="6,2" HorizontalAlignment="Left">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding AiAvailable}" Value="True">
-                                        <Setter Property="Text" Value="🟢 Connected"/>
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsStartingAi}" Value="True">
+                                        <Setter Property="Content" Value="Starting..."/>
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
-                        </TextBlock.Style>
-                    </TextBlock>
+                        </Button.Style>
+                    </Button>
                 </StackPanel>
             </StackPanel>
         </Grid>
@@ -91,7 +143,11 @@
         <!-- ===== THUMBNAIL GRID ===== -->
         <ListBox Grid.Column="2" ItemsSource="{Binding Groups}"
                  Background="#1E1E1E" BorderThickness="0"
+                 Focusable="True"
+                 PreviewKeyDown="OnThumbnailAreaKeyDown"
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                 ScrollViewer.CanContentScroll="True"
                  VirtualizingPanel.IsVirtualizing="True"
                  VirtualizingPanel.VirtualizationMode="Recycling"
                  VirtualizingPanel.ScrollUnit="Pixel">
@@ -123,8 +179,7 @@
                         </Border>
 
                         <!-- Thumbnail Wrap -->
-                        <ItemsControl ItemsSource="{Binding Items}"
-                                      MaxHeight="560">
+                        <ItemsControl ItemsSource="{Binding Items}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <WrapPanel/>
@@ -133,11 +188,43 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <Border Width="130" Height="140" Margin="4"
-                                            Background="#2D2D2D" BorderBrush="#444"
-                                            BorderThickness="1" CornerRadius="3"
+                                            Background="#2D2D2D"
+                                            BorderThickness="2" CornerRadius="3"
                                             Cursor="Hand"
                                             MouseLeftButtonDown="OnThumbnailClick"
-                                            MouseLeftButtonUp="OnThumbnailDoubleClick">
+                                            MouseRightButtonDown="OnThumbnailRightClick"
+                                            Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                                        <Border.ContextMenu>
+                                            <!-- A ContextMenu sits in its own visual tree, so the
+                                                 view model is reached via PlacementTarget.Tag. -->
+                                            <ContextMenu>
+                                                <MenuItem Header="Open in Editor"
+                                                          Command="{Binding PlacementTarget.Tag.OpenInEditorCommand,
+                                                                    RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                <Separator/>
+                                                <MenuItem Header="Select All"
+                                                          Command="{Binding PlacementTarget.Tag.SelectAllCommand,
+                                                                    RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                <Separator/>
+                                                <MenuItem Header="🗑 Move to Recycle Bin"
+                                                          Command="{Binding PlacementTarget.Tag.DeleteSelectedCommand,
+                                                                    RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                            </ContextMenu>
+                                        </Border.ContextMenu>
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="BorderBrush" Value="#444"/>
+                                                <Style.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter Property="BorderBrush" Value="#777"/>
+                                                    </Trigger>
+                                                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                        <Setter Property="BorderBrush" Value="#4C9BE8"/>
+                                                        <Setter Property="Background" Value="#31445A"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
                                         <StackPanel>
                                             <Image Source="{Binding Thumbnail}"
                                                    Width="120" Height="100"
@@ -198,9 +285,14 @@
                     <Border Height="1" Background="#444" Margin="0,0,0,8"/>
 
                     <!-- Actions -->
+                    <TextBlock Text="{Binding SelectionSummary}" Foreground="#4C9BE8"
+                               FontSize="11" Margin="0,0,0,4"/>
                     <Button Content="✏️ Open in Editor" Command="{Binding OpenInEditorCommand}"
                             HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
                             Margin="0,0,0,4"/>
+                    <Button Content="🗑️ Move to Recycle Bin" Command="{Binding DeleteSelectedCommand}"
+                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                            Background="#4A2A2A" Foreground="#CCC" Margin="0,0,0,4"/>
                     <Button Content="🗑️ Delete Duplicates" Command="{Binding DeleteDuplicatesCommand}"
                             HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
                             Background="#4A2A2A" Foreground="#CCC"/>

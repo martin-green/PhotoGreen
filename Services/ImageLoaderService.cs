@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Windows;
 using System.Windows.Media;
@@ -206,46 +207,206 @@ public class HistogramData
     public int[] Luminance { get; } = new int[BinCount];
     public int MaxCount { get; internal set; }
 
+    // Rec. 709 luminance weights in 16-bit fixed point (0.2126, 0.7152, 0.0722).
+    // They sum to exactly 65536, so r=g=b=255 maps to bin 255 with no clamping needed.
+    private const int LumR = 13933;
+    private const int LumG = 46871;
+    private const int LumB = 4732;
+
+    /// <summary>
+    /// Number of pixels below which the parallel partitioning overhead outweighs the gain.
+    /// </summary>
+    private const int ParallelThreshold = 1 << 16;
+
     public static HistogramData FromPixels(ushort[] linearPixels, uint width, uint height)
     {
         var data = new HistogramData();
-        var pixelCount = (int)(width * height);
 
-        for (int i = 0; i < pixelCount; i++)
+        // Only walk whole RGB triples that actually exist in the buffer. Computing this
+        // once hoists what used to be a per-pixel bounds check out of the hot loop.
+        var pixelCount = (int)Math.Min((long)width * height, linearPixels.Length / 3);
+        if (pixelCount <= 0)
         {
-            var idx = i * 3;
-            if (idx + 2 >= linearPixels.Length)
-                break;
-
-            // Map 16-bit to 8-bit bin
-            int r = linearPixels[idx] >> 8;
-            int g = linearPixels[idx + 1] >> 8;
-            int b = linearPixels[idx + 2] >> 8;
-
-            r = Math.Clamp(r, 0, 255);
-            g = Math.Clamp(g, 0, 255);
-            b = Math.Clamp(b, 0, 255);
-
-            data.Red[r]++;
-            data.Green[g]++;
-            data.Blue[b]++;
-
-            // Luminance: standard Rec. 709
-            int lum = (int)(0.2126 * r + 0.7152 * g + 0.0722 * b);
-            lum = Math.Clamp(lum, 0, 255);
-            data.Luminance[lum]++;
+            data.MaxCount = 1;
+            return data;
         }
 
-        // Find max for normalization (excluding extremes which often spike)
+        if (pixelCount < ParallelThreshold)
+        {
+            Accumulate(linearPixels, 0, pixelCount, data.Red, data.Green, data.Blue, data.Luminance);
+        }
+        else
+        {
+            // Each worker accumulates into private bins so the increments need no
+            // synchronisation; only the small 256-bin merge is locked.
+            var mergeLock = new object();
+
+            Parallel.ForEach(
+                Partitioner.Create(0, pixelCount),
+                () => new int[BinCount * 4],
+                (range, _, local) =>
+                {
+                    Accumulate(
+                        linearPixels,
+                        range.Item1,
+                        range.Item2,
+                        local.AsSpan(0, BinCount),
+                        local.AsSpan(BinCount, BinCount),
+                        local.AsSpan(BinCount * 2, BinCount),
+                        local.AsSpan(BinCount * 3, BinCount));
+                    return local;
+                },
+                local =>
+                {
+                    lock (mergeLock)
+                    {
+                        for (int bin = 0; bin < BinCount; bin++)
+                        {
+                            data.Red[bin] += local[bin];
+                            data.Green[bin] += local[BinCount + bin];
+                            data.Blue[bin] += local[BinCount * 2 + bin];
+                            data.Luminance[bin] += local[BinCount * 3 + bin];
+                        }
+                    }
+                });
+        }
+
+        data.Normalize();
+
+        return data;
+    }
+
+    /// <summary>
+    /// Bins pixels in [startPixel, endPixel) into the supplied 256-entry spans.
+    /// </summary>
+    /// <remarks>
+    /// No clamping is performed: the source values are <see cref="ushort"/>, so <c>>> 8</c>
+    /// always yields 0-255, and the fixed-point luminance weights sum to 65536 so the
+    /// luminance is bounded by the same range. This lets the JIT elide the bounds checks.
+    /// </remarks>
+    private static void Accumulate(
+        ushort[] pixels,
+        int startPixel,
+        int endPixel,
+        Span<int> red,
+        Span<int> green,
+        Span<int> blue,
+        Span<int> luminance)
+    {
+        var source = pixels.AsSpan(startPixel * 3, (endPixel - startPixel) * 3);
+
+        for (int idx = 0; idx + 2 < source.Length; idx += 3)
+        {
+            int r = source[idx] >> 8;
+            int g = source[idx + 1] >> 8;
+            int b = source[idx + 2] >> 8;
+
+            red[r]++;
+            green[g]++;
+            blue[b]++;
+            luminance[(r * LumR + g * LumG + b * LumB) >> 16]++;
+        }
+    }
+
+    /// <summary>
+    /// Builds a histogram from interleaved 8-bit RGB output. Uses the same per-worker
+    /// private-bin strategy as <see cref="FromPixels"/> so the hot increments stay
+    /// lock-free.
+    /// </summary>
+    public static HistogramData FromBytes(byte[] rgb, int pixelCount)
+    {
+        var data = new HistogramData();
+
+        pixelCount = (int)Math.Min(pixelCount, rgb.Length / 3);
+        if (pixelCount <= 0)
+        {
+            data.MaxCount = 1;
+            return data;
+        }
+
+        if (pixelCount < ParallelThreshold)
+        {
+            AccumulateBytes(rgb, 0, pixelCount, data.Red, data.Green, data.Blue, data.Luminance);
+        }
+        else
+        {
+            var mergeLock = new object();
+
+            Parallel.ForEach(
+                Partitioner.Create(0, pixelCount),
+                () => new int[BinCount * 4],
+                (range, _, local) =>
+                {
+                    AccumulateBytes(
+                        rgb,
+                        range.Item1,
+                        range.Item2,
+                        local.AsSpan(0, BinCount),
+                        local.AsSpan(BinCount, BinCount),
+                        local.AsSpan(BinCount * 2, BinCount),
+                        local.AsSpan(BinCount * 3, BinCount));
+                    return local;
+                },
+                local =>
+                {
+                    lock (mergeLock)
+                    {
+                        for (int bin = 0; bin < BinCount; bin++)
+                        {
+                            data.Red[bin] += local[bin];
+                            data.Green[bin] += local[BinCount + bin];
+                            data.Blue[bin] += local[BinCount * 2 + bin];
+                            data.Luminance[bin] += local[BinCount * 3 + bin];
+                        }
+                    }
+                });
+        }
+
+        data.Normalize();
+        return data;
+    }
+
+    /// <summary>
+    /// Byte-source counterpart to <see cref="Accumulate"/>. The values are already 0-255,
+    /// so no shift or clamp is required.
+    /// </summary>
+    private static void AccumulateBytes(
+        byte[] pixels,
+        int startPixel,
+        int endPixel,
+        Span<int> red,
+        Span<int> green,
+        Span<int> blue,
+        Span<int> luminance)
+    {
+        var source = pixels.AsSpan(startPixel * 3, (endPixel - startPixel) * 3);
+
+        for (int idx = 0; idx + 2 < source.Length; idx += 3)
+        {
+            int r = source[idx];
+            int g = source[idx + 1];
+            int b = source[idx + 2];
+
+            red[r]++;
+            green[g]++;
+            blue[b]++;
+            luminance[(r * LumR + g * LumG + b * LumB) >> 16]++;
+        }
+    }
+
+    /// <summary>
+    /// Sets <see cref="MaxCount"/> from the bins, ignoring the first and last entries
+    /// which commonly spike on clipped images.
+    /// </summary>
+    private void Normalize()
+    {
         int max = 0;
         for (int i = 1; i < BinCount - 1; i++)
         {
-            max = Math.Max(max, data.Red[i]);
-            max = Math.Max(max, data.Green[i]);
-            max = Math.Max(max, data.Blue[i]);
+            max = Math.Max(max, Red[i]);
+            max = Math.Max(max, Green[i]);
+            max = Math.Max(max, Blue[i]);
         }
-        data.MaxCount = Math.Max(max, 1);
-
-        return data;
+        MaxCount = Math.Max(max, 1);
     }
 }

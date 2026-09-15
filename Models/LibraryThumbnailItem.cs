@@ -12,5 +12,9 @@ public partial class LibraryThumbnailItem : ObservableObject
     [ObservableProperty]
     private BitmapSource? _thumbnail;
 
+    /// <summary>True when the item is part of the current multi-selection.</summary>
+    [ObservableProperty]
+    private bool _isSelected;
+
     public LibraryImageInfo? ImageInfo { get; set; }
 }

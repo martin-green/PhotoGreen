@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Windows;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -12,7 +13,8 @@ namespace PhotoGreen.ViewModels;
 
 public partial class LibraryViewModel : ObservableObject
 {
-    private readonly AIService _aiService = new();
+    private readonly AIService _aiService = AIService.FromSettings(AppSettingsService.Instance);
+    private readonly AppSettingsService _settingsService = AppSettingsService.Instance;
     private LibraryScanService? _scanService;
     private LibraryData? _libraryData;
     private CancellationTokenSource? _scanCts;
@@ -26,6 +28,15 @@ public partial class LibraryViewModel : ObservableObject
     private LibraryGroupMode _groupMode = LibraryGroupMode.Folder;
 
     [ObservableProperty]
+    private LibrarySortMode _sortMode = LibrarySortMode.NameAscending;
+
+    /// <summary>
+    /// Case-insensitive substring applied to file names; empty shows everything.
+    /// </summary>
+    [ObservableProperty]
+    private string _filterText = string.Empty;
+
+    [ObservableProperty]
     private bool _isScanning;
 
     [ObservableProperty]
@@ -37,8 +48,34 @@ public partial class LibraryViewModel : ObservableObject
     [ObservableProperty]
     private bool _aiAvailable;
 
+    /// <summary>Human-readable AI connection detail shown next to the status indicator.</summary>
+    [ObservableProperty]
+    private string _aiStatusText = "Checking...";
+
+    /// <summary>True while the Ollama server is being started, to disable the button.</summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(StartAiCommand))]
+    private bool _isStartingAi;
+
     [ObservableProperty]
     private LibraryThumbnailItem? _selectedItem;
+
+    /// <summary>Backing store for the multi-selection, in the order items were selected.</summary>
+    private readonly List<LibraryThumbnailItem> _selectedItems = [];
+
+    /// <summary>Anchor used as the fixed end of a shift-click range.</summary>
+    private LibraryThumbnailItem? _selectionAnchor;
+
+    /// <summary>Number of currently selected thumbnails.</summary>
+    [ObservableProperty]
+    private int _selectedCount;
+
+    /// <summary>Display text such as "3 selected"; empty when nothing is selected.</summary>
+    [ObservableProperty]
+    private string _selectionSummary = string.Empty;
+
+    /// <summary>The selected thumbnails, in selection order.</summary>
+    public IReadOnlyList<LibraryThumbnailItem> SelectedItems => _selectedItems;
 
     public ObservableCollection<LibraryGroup> Groups { get; } = [];
 
@@ -62,13 +99,124 @@ public partial class LibraryViewModel : ObservableObject
 
     public LibraryViewModel()
     {
+        RestoreLastLibraryFolder();
         _ = CheckAIAsync();
+    }
+
+    /// <summary>
+    /// Reopens the library that was in use when the app last exited. A folder that has
+    /// since been deleted or unmounted is ignored so startup still succeeds.
+    /// </summary>
+    private void RestoreLastLibraryFolder()
+    {
+        var folder = _settingsService.Settings.LibraryRootFolder;
+        if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
+            return;
+
+        RootFolder = folder;
+        ScanStatusText = "Opening library...";
+
+        // LoadLibrary walks the whole tree and fills UI-bound collections, so it has to
+        // run on the UI thread. Queue it at Background priority so the window renders
+        // first instead of appearing to hang on a large library.
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null)
+        {
+            LoadLibraryRestoringErrors();
+            return;
+        }
+
+        dispatcher.BeginInvoke(DispatcherPriority.Background, LoadLibraryRestoringErrors);
+    }
+
+    /// <summary>
+    /// Wraps <see cref="LoadLibrary"/> so a failure to reopen the previous library is
+    /// reported in the status bar rather than taking down startup.
+    /// </summary>
+    private void LoadLibraryRestoringErrors()
+    {
+        try
+        {
+            LoadLibrary();
+        }
+        catch (Exception ex)
+        {
+            ScanStatusText = $"Could not open last library: {ex.Message}";
+        }
     }
 
     private async Task CheckAIAsync()
     {
         AiAvailable = await _aiService.CheckAvailabilityAsync();
+        AiStatusText = AiAvailable
+            ? _aiService.Model
+            : await DescribeUnavailableReasonAsync();
     }
+
+    /// <summary>
+    /// Works out why the AI is unavailable so the UI can tell the user whether to start
+    /// the server, install a model, or fix the endpoint.
+    /// </summary>
+    private async Task<string> DescribeUnavailableReasonAsync()
+    {
+        var process = new OllamaProcessService(_aiService.Endpoint);
+
+        if (!await process.IsServerRunningAsync())
+            return "Ollama not running";
+
+        var models = await _aiService.ListAvailableModelsAsync();
+        return models.Count == 0
+            ? "No models installed"
+            : "No vision model found";
+    }
+
+    /// <summary>
+    /// Starts the Ollama server if it is not already running, then loads the vision model
+    /// so the first analysis is not delayed.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanStartAi))]
+    private async Task StartAi()
+    {
+        IsStartingAi = true;
+        try
+        {
+            var process = new OllamaProcessService(_aiService.Endpoint);
+
+            AiStatusText = "Starting Ollama...";
+            var (started, message) = await process.EnsureServerRunningAsync();
+            if (!started)
+            {
+                AiStatusText = message;
+                AiAvailable = false;
+                return;
+            }
+
+            AiStatusText = "Looking for a vision model...";
+            if (!await _aiService.CheckAvailabilityAsync())
+            {
+                AiAvailable = false;
+                AiStatusText = await DescribeUnavailableReasonAsync();
+                return;
+            }
+
+            AiStatusText = $"Loading {_aiService.Model}...";
+            await process.PreloadModelAsync(_aiService.Model);
+
+            AiAvailable = true;
+            AiStatusText = _aiService.Model;
+        }
+        catch (Exception ex)
+        {
+            AiAvailable = false;
+            AiStatusText = $"Failed to start: {ex.Message}";
+        }
+        finally
+        {
+            IsStartingAi = false;
+        }
+    }
+
+    private bool CanStartAi() => !IsStartingAi;
 
     partial void OnSelectedItemChanged(LibraryThumbnailItem? value)
     {
@@ -127,8 +275,7 @@ public partial class LibraryViewModel : ObservableObject
 
         if (dialog.ShowDialog() == true)
         {
-            RootFolder = dialog.FolderName;
-            LoadLibrary();
+            SetRootFolder(dialog.FolderName);
         }
     }
 
@@ -156,7 +303,13 @@ public partial class LibraryViewModel : ObservableObject
             _libraryData = await Task.Run(
                 () => _scanService.ScanAsync(RootFolder, progressHandler, _scanCts.Token));
             BuildGroups();
-            ScanStatusText = $"Scan complete — {_libraryData.Images.Count} images";
+
+            // The scan re-probes the AI, so reflect the outcome here. Warn explicitly when it
+            // was unavailable, otherwise a scan that produced no tags or faces looks successful.
+            AiAvailable = _aiService.IsAvailable;
+            ScanStatusText = AiAvailable
+                ? $"Scan complete — {_libraryData.Images.Count} images"
+                : $"Scan complete — {_libraryData.Images.Count} images (AI unavailable, no tags or faces)";
         }
         catch (OperationCanceledException)
         {
@@ -169,6 +322,7 @@ public partial class LibraryViewModel : ObservableObject
         finally
         {
             IsScanning = false;
+            AiStatusText = AiAvailable ? _aiService.Model : await DescribeUnavailableReasonAsync();
         }
     }
 
@@ -184,6 +338,262 @@ public partial class LibraryViewModel : ObservableObject
         if (SelectedItem != null)
         {
             OpenInEditorRequested?.Invoke(SelectedItem.FullPath);
+        }
+    }
+
+    /// <summary>
+    /// Applies a click to the selection. Ctrl toggles, Shift extends from the anchor,
+    /// and a plain click replaces the selection.
+    /// </summary>
+    public void SelectItem(LibraryThumbnailItem item, bool isCtrlDown, bool isShiftDown)
+    {
+        // Fall back to the current item so a shift-click works even when no anchor has
+        // been established yet (for example the first click after a rescan).
+        var anchor = _selectionAnchor ?? SelectedItem;
+
+        if (isShiftDown && anchor != null)
+        {
+            var flat = FlattenedItems();
+            var start = flat.IndexOf(anchor);
+            var end = flat.IndexOf(item);
+
+            if (start >= 0 && end >= 0)
+            {
+                _selectionAnchor = anchor;
+
+                if (start > end)
+                    (start, end) = (end, start);
+
+                if (!isCtrlDown)
+                    ClearSelection();
+
+                for (var i = start; i <= end; i++)
+                    Select(flat[i]);
+
+                SelectedItem = item;
+                UpdateSelectionState();
+                return;
+            }
+        }
+
+        if (isCtrlDown)
+        {
+            if (item.IsSelected)
+            {
+                item.IsSelected = false;
+                _selectedItems.Remove(item);
+                SelectedItem = _selectedItems.LastOrDefault();
+            }
+            else
+            {
+                Select(item);
+                SelectedItem = item;
+            }
+
+            _selectionAnchor = item;
+            UpdateSelectionState();
+            return;
+        }
+
+        ClearSelection();
+        Select(item);
+        SelectedItem = item;
+        _selectionAnchor = item;
+        UpdateSelectionState();
+    }
+
+    private void Select(LibraryThumbnailItem item)
+    {
+        if (item.IsSelected)
+            return;
+
+        item.IsSelected = true;
+        _selectedItems.Add(item);
+    }
+
+    private void ClearSelection()
+    {
+        foreach (var selected in _selectedItems)
+            selected.IsSelected = false;
+
+        _selectedItems.Clear();
+    }
+
+    /// <summary>Selects every item currently shown, respecting the active filter and grouping.</summary>
+    [RelayCommand]
+    private void SelectAll()
+    {
+        ClearSelection();
+
+        foreach (var item in FlattenedItems())
+            Select(item);
+
+        SelectedItem = _selectedItems.LastOrDefault();
+        UpdateSelectionState();
+    }
+
+    /// <summary>The visible items in display order, used for shift-range selection.</summary>
+    private List<LibraryThumbnailItem> FlattenedItems() =>
+        Groups.SelectMany(g => g.Items).ToList();
+
+    /// <summary>Direction for keyboard-driven selection movement.</summary>
+    public enum SelectionMove
+    {
+        Previous,
+        Next,
+        First,
+        Last
+    }
+
+    /// <summary>
+    /// Moves the caret item with the keyboard. When <paramref name="extend"/> is true the
+    /// selection grows as a contiguous range from the anchor, matching Explorer behaviour.
+    /// </summary>
+    public void MoveSelection(SelectionMove move, bool extend)
+    {
+        var flat = FlattenedItems();
+        if (flat.Count == 0)
+            return;
+
+        // Without a current item, start from whichever end the user is heading towards.
+        var current = SelectedItem != null ? flat.IndexOf(SelectedItem) : -1;
+
+        var target = move switch
+        {
+            SelectionMove.Previous => current < 0 ? flat.Count - 1 : current - 1,
+            SelectionMove.Next => current < 0 ? 0 : current + 1,
+            SelectionMove.First => 0,
+            SelectionMove.Last => flat.Count - 1,
+            _ => current
+        };
+
+        target = Math.Clamp(target, 0, flat.Count - 1);
+        var item = flat[target];
+
+        if (extend)
+        {
+            // Anchor the range on first extend so the fixed end stays put while the
+            // caret moves, allowing the range to shrink as well as grow.
+            _selectionAnchor ??= SelectedItem ?? item;
+
+            var start = flat.IndexOf(_selectionAnchor);
+            if (start < 0)
+            {
+                _selectionAnchor = item;
+                start = target;
+            }
+
+            var end = target;
+            if (start > end)
+                (start, end) = (end, start);
+
+            ClearSelection();
+
+            for (var i = start; i <= end; i++)
+                Select(flat[i]);
+
+            SelectedItem = item;
+            UpdateSelectionState();
+            return;
+        }
+
+        ClearSelection();
+        Select(item);
+        SelectedItem = item;
+        _selectionAnchor = item;
+        UpdateSelectionState();
+    }
+
+    private void UpdateSelectionState()
+    {
+        SelectedCount = _selectedItems.Count;
+        SelectionSummary = SelectedCount switch
+        {
+            0 => string.Empty,
+            1 => "1 selected",
+            _ => $"{SelectedCount} selected"
+        };
+
+        DeleteSelectedCommand.NotifyCanExecuteChanged();
+    }
+
+    private bool CanDeleteSelected() => _selectedItems.Count > 0;
+
+    /// <summary>
+    /// Moves every selected photo to the Windows Recycle Bin after confirmation, then
+    /// removes the entries from the library index.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanDeleteSelected))]
+    private void DeleteSelected()
+    {
+        if (_selectedItems.Count == 0 || _libraryData == null)
+            return;
+
+        var targets = _selectedItems.ToList();
+
+        var message = targets.Count == 1
+            ? $"Move \"{targets[0].FileName}\" to the Recycle Bin?"
+            : $"Move {targets.Count} photos to the Recycle Bin?";
+
+        var confirm = MessageBox.Show(
+            message,
+            "Delete photos",
+            MessageBoxButton.OKCancel,
+            MessageBoxImage.Warning,
+            MessageBoxResult.Cancel);
+
+        if (confirm != MessageBoxResult.OK)
+            return;
+
+        var deleted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var failures = new List<string>();
+
+        foreach (var item in targets)
+        {
+            try
+            {
+                if (File.Exists(item.FullPath))
+                {
+                    Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(
+                        item.FullPath,
+                        Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                        Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                }
+
+                deleted.Add(item.RelativePath);
+            }
+            catch (Exception ex)
+            {
+                failures.Add($"{item.FileName}: {ex.Message}");
+            }
+        }
+
+        if (deleted.Count > 0)
+        {
+            _libraryData.Images.RemoveAll(i => deleted.Contains(i.RelativePath));
+
+            foreach (var group in _libraryData.DuplicateGroups)
+                group.ImagePaths.RemoveAll(deleted.Contains);
+
+            _libraryData.DuplicateGroups.RemoveAll(g => g.ImagePaths.Count < 2);
+
+            LibraryDataStore.Save(_libraryData);
+        }
+
+        ClearSelection();
+        SelectedItem = null;
+        _selectionAnchor = null;
+        UpdateSelectionState();
+
+        BuildGroups();
+
+        if (failures.Count > 0)
+        {
+            MessageBox.Show(
+                $"Could not delete {failures.Count} file(s):\n\n{string.Join("\n", failures.Take(10))}",
+                "Delete photos",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
         }
     }
 
@@ -232,6 +642,16 @@ public partial class LibraryViewModel : ObservableObject
     }
 
     partial void OnGroupModeChanged(LibraryGroupMode value)
+    {
+        BuildGroups();
+    }
+
+    partial void OnSortModeChanged(LibrarySortMode value)
+    {
+        BuildGroups();
+    }
+
+    partial void OnFilterTextChanged(string value)
     {
         BuildGroups();
     }
@@ -290,17 +710,30 @@ public partial class LibraryViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Opens a library folder and remembers it so the next run reopens the same library.
+    /// </summary>
     public void SetRootFolder(string folder)
     {
-        if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder))
-        {
-            RootFolder = folder;
-            LoadLibrary();
-        }
+        if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
+            return;
+
+        RootFolder = folder;
+        LoadLibrary();
+
+        // Persist immediately rather than on exit, so the choice survives a crash or a
+        // kill from the debugger.
+        _settingsService.Settings.LibraryRootFolder = folder;
+        _settingsService.Save();
     }
 
     private void BuildGroups()
     {
+        // Item instances are recreated below, so any held selection would become stale.
+        _selectedItems.Clear();
+        _selectionAnchor = null;
+        UpdateSelectionState();
+
         Groups.Clear();
 
         if (_libraryData == null || _libraryData.Images.Count == 0)
@@ -330,9 +763,9 @@ public partial class LibraryViewModel : ObservableObject
 
     private void BuildFolderGroups()
     {
-        var byFolder = _libraryData!.Images
+        var byFolder = FilterAndSort(_libraryData!.Images)
             .GroupBy(i => Path.GetDirectoryName(i.RelativePath) ?? string.Empty)
-            .OrderBy(g => g.Key);
+            .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase);
 
         foreach (var folder in byFolder)
         {
@@ -341,13 +774,40 @@ public partial class LibraryViewModel : ObservableObject
                 Name = string.IsNullOrEmpty(folder.Key) ? "(root)" : folder.Key
             };
 
-            foreach (var image in folder.OrderBy(i => i.RelativePath))
+            foreach (var image in folder)
             {
                 group.Items.Add(CreateThumbnailItem(image));
             }
 
-            Groups.Add(group);
+            if (group.Items.Count > 0)
+                Groups.Add(group);
         }
+    }
+
+    /// <summary>
+    /// Applies the file-name substring filter and the active sort order.
+    /// </summary>
+    private IEnumerable<LibraryImageInfo> FilterAndSort(IEnumerable<LibraryImageInfo> images)
+    {
+        var filter = FilterText?.Trim();
+        if (!string.IsNullOrEmpty(filter))
+        {
+            images = images.Where(i => Path.GetFileName(i.RelativePath)
+                .Contains(filter, StringComparison.OrdinalIgnoreCase));
+        }
+
+        return SortMode switch
+        {
+            LibrarySortMode.NameDescending =>
+                images.OrderByDescending(i => i.RelativePath, StringComparer.OrdinalIgnoreCase),
+            LibrarySortMode.DateNewest =>
+                images.OrderByDescending(i => i.LastModifiedUtc)
+                      .ThenBy(i => i.RelativePath, StringComparer.OrdinalIgnoreCase),
+            LibrarySortMode.DateOldest =>
+                images.OrderBy(i => i.LastModifiedUtc)
+                      .ThenBy(i => i.RelativePath, StringComparer.OrdinalIgnoreCase),
+            _ => images.OrderBy(i => i.RelativePath, StringComparer.OrdinalIgnoreCase)
+        };
     }
 
     private void BuildFaceGroups()
@@ -355,8 +815,8 @@ public partial class LibraryViewModel : ObservableObject
         if (_libraryData!.FaceClusters.Count == 0)
         {
             // No clusters — show all images with faces vs without
-            var withFaces = _libraryData.Images.Where(i => i.Faces.Count > 0).ToList();
-            var withoutFaces = _libraryData.Images.Where(i => i.Faces.Count == 0).ToList();
+            var withFaces = FilterAndSort(_libraryData.Images.Where(i => i.Faces.Count > 0)).ToList();
+            var withoutFaces = FilterAndSort(_libraryData.Images.Where(i => i.Faces.Count == 0)).ToList();
 
             if (withFaces.Count > 0)
             {
@@ -385,7 +845,7 @@ public partial class LibraryViewModel : ObservableObject
             };
 
             var imageSet = new HashSet<string>(cluster.ImagePaths, StringComparer.OrdinalIgnoreCase);
-            foreach (var image in _libraryData.Images.Where(i => imageSet.Contains(i.RelativePath)))
+            foreach (var image in FilterAndSort(_libraryData.Images.Where(i => imageSet.Contains(i.RelativePath))))
             {
                 group.Items.Add(CreateThumbnailItem(image));
             }
@@ -399,8 +859,8 @@ public partial class LibraryViewModel : ObservableObject
             .SelectMany(c => c.ImagePaths)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var unassigned = _libraryData.Images
-            .Where(i => i.Faces.Count > 0 && !allClustered.Contains(i.RelativePath))
+        var unassigned = FilterAndSort(_libraryData.Images
+                .Where(i => i.Faces.Count > 0 && !allClustered.Contains(i.RelativePath)))
             .ToList();
 
         if (unassigned.Count > 0)
@@ -422,12 +882,10 @@ public partial class LibraryViewModel : ObservableObject
 
             var group = new LibraryGroup { Name = label };
 
-            foreach (var path in dupGroup.ImagePaths)
+            var paths = new HashSet<string>(dupGroup.ImagePaths, StringComparer.OrdinalIgnoreCase);
+            foreach (var image in FilterAndSort(_libraryData.Images.Where(i => paths.Contains(i.RelativePath))))
             {
-                var image = _libraryData.Images
-                    .FirstOrDefault(i => string.Equals(i.RelativePath, path, StringComparison.OrdinalIgnoreCase));
-                if (image != null)
-                    group.Items.Add(CreateThumbnailItem(image));
+                group.Items.Add(CreateThumbnailItem(image));
             }
 
             if (group.Items.Count > 0)
@@ -437,7 +895,7 @@ public partial class LibraryViewModel : ObservableObject
 
     private void BuildTagGroups()
     {
-        var byTag = _libraryData!.Images
+        var byTag = FilterAndSort(_libraryData!.Images)
             .SelectMany(i => i.Tags.Select(t => (Tag: t.ToLowerInvariant(), Image: i)))
             .GroupBy(x => x.Tag)
             .OrderByDescending(g => g.Count())
@@ -450,7 +908,9 @@ public partial class LibraryViewModel : ObservableObject
             {
                 group.Items.Add(CreateThumbnailItem(entry.Image));
             }
-            Groups.Add(group);
+
+            if (group.Items.Count > 0)
+                Groups.Add(group);
         }
     }
 

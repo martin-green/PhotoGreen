@@ -1,6 +1,7 @@
 using System.IO;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
+using ImageMagick;
 using Windows.Devices.Enumeration;
 using Windows.Media.Import;
 
@@ -27,7 +28,15 @@ public class CameraImportService : IDisposable
     public event Action<string>? LogMessage;
 
     private DeviceWatcher? _deviceWatcher;
+    private DeviceWatcher? _wpdWatcher;
     private PhotoImportFindItemsResult? _lastFindResult;
+
+    private const int SourceReadyRetryCount = 5;
+    private const int SourceReadyRetryDelayMs = 1000;
+
+    // The camera import runs in two phases: the WMI copy to the staging folder and the
+    // subsequent organize/move pass. Split the 0-100 bar between them so it keeps moving.
+    private const double CopyPhaseWeight = 90;
 
     public string? LastImportedFolder { get; private set; }
 
@@ -46,43 +55,89 @@ public class CameraImportService : IDisposable
 
     public void StartWatching()
     {
-        if (_deviceWatcher != null)
+        if (_deviceWatcher != null || _wpdWatcher != null)
             return;
 
+        // Card readers / cameras exposed as USB mass storage.
         _deviceWatcher = DeviceInformation.CreateWatcher(
             DeviceClass.PortableStorageDevice);
+        AttachWatcherHandlers(_deviceWatcher);
+        _deviceWatcher.Start();
 
-        _deviceWatcher.Added += async (_, args) =>
+        // Cameras in MTP/PTP mode do NOT enumerate as PortableStorageDevice - they
+        // show up under the Windows Portable Devices interface class, so they need
+        // their own watcher or connecting a camera raises no event at all.
+        _wpdWatcher = DeviceInformation.CreateWatcher(
+            $"System.Devices.InterfaceClassGuid:=\"{WpdInterfaceClass}\" AND " +
+            "System.Devices.InterfaceEnabled:=System.StructuredQueryType.Boolean#True");
+        AttachWatcherHandlers(_wpdWatcher);
+        _wpdWatcher.Start();
+    }
+
+    private void AttachWatcherHandlers(DeviceWatcher watcher)
+    {
+        watcher.Added += async (_, args) =>
         {
             StatusChanged?.Invoke($"Device connected: {args.Name}");
-            try
+
+            var source = await WaitForSourceAsync();
+            if (source != null)
             {
-                var sources = await FindSourcesAsync();
-                if (sources.Count > 0)
-                    SourceConnected?.Invoke(sources[0]);
+                SourceConnected?.Invoke(source);
             }
-            catch
+            else
             {
-                // Device may not be ready yet
+                Log($"Device '{args.Name}' connected but exposed no importable photo source.");
             }
         };
 
-        _deviceWatcher.Removed += (_, _) =>
+        watcher.Removed += (_, _) =>
         {
             StatusChanged?.Invoke("Device disconnected.");
             SourceDisconnected?.Invoke();
         };
+    }
 
-        _deviceWatcher.Start();
+    /// <summary>
+    /// A freshly attached camera is usually not ready to enumerate immediately, so
+    /// poll a few times before giving up.
+    /// </summary>
+    private async Task<PhotoImportSource?> WaitForSourceAsync()
+    {
+        for (var attempt = 0; attempt < SourceReadyRetryCount; attempt++)
+        {
+            await Task.Delay(SourceReadyRetryDelayMs);
+
+            try
+            {
+                var sources = await FindSourcesAsync();
+                if (sources.Count > 0)
+                    return sources[0];
+            }
+            catch
+            {
+                // Device may not be ready yet - retry.
+            }
+        }
+
+        return null;
     }
 
     public void StopWatching()
     {
-        if (_deviceWatcher is { Status: DeviceWatcherStatus.Started or DeviceWatcherStatus.EnumerationCompleted })
-        {
-            _deviceWatcher.Stop();
-        }
+        StopWatcher(_deviceWatcher);
         _deviceWatcher = null;
+
+        StopWatcher(_wpdWatcher);
+        _wpdWatcher = null;
+    }
+
+    private static void StopWatcher(DeviceWatcher? watcher)
+    {
+        if (watcher is { Status: DeviceWatcherStatus.Started or DeviceWatcherStatus.EnumerationCompleted })
+        {
+            watcher.Stop();
+        }
     }
 
     public void Dispose()
@@ -167,7 +222,9 @@ public class CameraImportService : IDisposable
 
         importOperation.Progress = (info, progress) =>
         {
-            ProgressChanged?.Invoke(progress.ImportProgress);
+            // PhotoImportProgress.ImportProgress is a 0.0-1.0 fraction, but the UI
+            // ProgressBar runs 0-100.
+            ProgressChanged?.Invoke(progress.ImportProgress * CopyPhaseWeight);
         };
 
         using var registration = cancellationToken.Register(() => importOperation.Cancel());
@@ -185,8 +242,12 @@ public class CameraImportService : IDisposable
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var date = imported.Date.DateTime;
-                var subFolder = ApplyFolderPattern(folderPattern, date);
+                var importedPath = Path.Combine(stagingDir, imported.Name);
+
+                // Prefer the EXIF capture date so the image lands in the folder for the
+                // day it was taken, not the day the device reports or the day of import.
+                var folderDate = TryGetExifCaptureDate(importedPath) ?? imported.Date.DateTime;
+                var subFolder = ApplyFolderPattern(folderPattern, folderDate);
                 var targetDir = Path.Combine(destinationFolder, subFolder);
                 Directory.CreateDirectory(targetDir);
                 firstFolder ??= targetDir;
@@ -194,7 +255,6 @@ public class CameraImportService : IDisposable
                 var targetPath = Path.Combine(targetDir, imported.Name);
                 targetPath = GetUniqueFilePath(targetPath);
 
-                var importedPath = Path.Combine(stagingDir, imported.Name);
                 Log($"[Camera]   Organizing: {imported.Name}");
                 Log($"[Camera]     Staging path: {importedPath} (exists={File.Exists(importedPath)})");
                 Log($"[Camera]     Target path:  {targetPath}");
@@ -218,12 +278,21 @@ public class CameraImportService : IDisposable
                     Log($"[Camera]     ERROR moving file: {ex.Message}");
                 }
 
-                var hash = ComputeItemIdentity(imported.Name, imported.SizeInBytes, date);
+                // Identity must match the inputs used by the duplicate check above, so it
+                // always uses the device-reported date rather than the EXIF capture date.
+                var hash = ComputeItemIdentity(imported);
                 importedHashes.Add(hash);
                 organized++;
+
+                if (importedItems.Count > 0)
+                {
+                    ProgressChanged?.Invoke(
+                        CopyPhaseWeight + (double)organized / importedItems.Count * (100 - CopyPhaseWeight));
+                }
             }
 
             LastImportedFolder = firstFolder;
+            ProgressChanged?.Invoke(100);
             Log($"[Camera] Import complete: {organized} organized. FirstFolder={firstFolder}");
             StatusChanged?.Invoke($"Import complete: {organized} images imported.");
         }
@@ -286,7 +355,7 @@ public class CameraImportService : IDisposable
                 continue;
             }
 
-            var fileDate = File.GetLastWriteTime(file);
+            var fileDate = TryGetExifCaptureDate(file) ?? File.GetLastWriteTime(file);
             var subFolder = ApplyFolderPattern(folderPattern, fileDate);
             var targetDir = Path.Combine(destinationFolder, subFolder);
             Directory.CreateDirectory(targetDir);
@@ -329,6 +398,56 @@ public class CameraImportService : IDisposable
             .Replace("{dd}", date.ToString("dd"))
             .Replace("{HH}", date.ToString("HH"))
             .Replace("{mm}", date.ToString("mm"));
+    }
+
+    /// <summary>
+    /// Reads the date the picture was taken from the EXIF metadata, or returns
+    /// <c>null</c> when the file has no usable capture date.
+    /// </summary>
+    private static DateTime? TryGetExifCaptureDate(string filePath)
+    {
+        try
+        {
+            if (!File.Exists(filePath))
+                return null;
+
+            using var image = new MagickImage();
+            image.Ping(filePath);
+
+            var exif = image.GetExifProfile();
+            if (exif == null)
+                return null;
+
+            return ReadExifDate(exif, ExifTag.DateTimeOriginal)
+                ?? ReadExifDate(exif, ExifTag.DateTimeDigitized)
+                ?? ReadExifDate(exif, ExifTag.DateTime);
+        }
+        catch
+        {
+            // Unreadable/unsupported metadata - caller falls back to the file date.
+            return null;
+        }
+    }
+
+    private static DateTime? ReadExifDate(IExifProfile exif, ExifTag<string> tag)
+    {
+        var value = exif.GetValue(tag)?.Value;
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        // EXIF dates use "yyyy:MM:dd HH:mm:ss" and are in local camera time.
+        if (DateTime.TryParseExact(value, "yyyy:MM:dd HH:mm:ss",
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var parsed))
+        {
+            return parsed;
+        }
+
+        return DateTime.TryParse(value,
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None, out var fallback)
+            ? fallback
+            : null;
     }
 
     public static string PreviewFolderPattern(string pattern)

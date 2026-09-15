@@ -6,6 +6,7 @@ xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
 xmlns:views="clr-namespace:PhotoGreen.Views"
 mc:Ignorable="d"
 Title="PhotoGreen" Height="700" Width="1200"
+Icon="pack://application:,,,/Assets/PhotoGreen.ico"
 WindowState="Maximized"
 Background="{StaticResource BackgroundBrush}"
 Foreground="{StaticResource ForegroundBrush}">

@@ -11,7 +11,7 @@ public partial class FileBrowserViewModel : ObservableObject
 {
     private readonly FileGroupingService _fileGroupingService = new();
     private readonly ThumbnailService _thumbnailService = new();
-    private readonly AppSettingsService _settingsService = new();
+    private readonly AppSettingsService _settingsService = AppSettingsService.Instance;
 
     [ObservableProperty]
     private string _currentDirectory = string.Empty;
