@@ -104,27 +104,31 @@ public class DuplicateDetectionService
             .Where(i => !string.IsNullOrEmpty(i.PerceptualHash) && !usedInGroup.Contains(i.RelativePath))
             .ToList();
 
-        var processed = new HashSet<int>();
+        // Parse each perceptual hash exactly once up front. Parsing inside the
+        // comparison loops turned an O(n^2) scan into O(n^2) string parses, which
+        // dominated the cost for large libraries.
+        var phashes = new ulong[withPHash.Count];
+        for (int i = 0; i < withPHash.Count; i++)
+            phashes[i] = ulong.Parse(withPHash[i].PerceptualHash!, System.Globalization.NumberStyles.HexNumber);
+
+        var processed = new bool[withPHash.Count];
+        var nearGroup = new List<int>();
         for (int i = 0; i < withPHash.Count; i++)
         {
-            if (processed.Contains(i))
+            if (processed[i])
                 continue;
 
-            var hashA = ulong.Parse(withPHash[i].PerceptualHash!, System.Globalization.NumberStyles.HexNumber);
-            var nearGroup = new List<int> { i };
+            var hashA = phashes[i];
+            nearGroup.Clear();
+            nearGroup.Add(i);
 
             for (int j = i + 1; j < withPHash.Count; j++)
             {
-                if (processed.Contains(j))
+                if (processed[j])
                     continue;
 
-                var hashB = ulong.Parse(withPHash[j].PerceptualHash!, System.Globalization.NumberStyles.HexNumber);
-                int distance = ImageHash.HammingDistance(hashA, hashB);
-
-                if (distance <= NearDuplicateThreshold)
-                {
+                if (ImageHash.HammingDistance(hashA, phashes[j]) <= NearDuplicateThreshold)
                     nearGroup.Add(j);
-                }
             }
 
             if (nearGroup.Count > 1)
@@ -132,12 +136,10 @@ public class DuplicateDetectionService
                 var paths = nearGroup.Select(idx => withPHash[idx].RelativePath).ToList();
 
                 // Compute max distance within group for reporting
-                var hashes = nearGroup.Select(idx =>
-                    ulong.Parse(withPHash[idx].PerceptualHash!, System.Globalization.NumberStyles.HexNumber)).ToList();
                 int maxDist = 0;
-                for (int a = 0; a < hashes.Count; a++)
-                    for (int b = a + 1; b < hashes.Count; b++)
-                        maxDist = Math.Max(maxDist, ImageHash.HammingDistance(hashes[a], hashes[b]));
+                for (int a = 0; a < nearGroup.Count; a++)
+                    for (int b = a + 1; b < nearGroup.Count; b++)
+                        maxDist = Math.Max(maxDist, ImageHash.HammingDistance(phashes[nearGroup[a]], phashes[nearGroup[b]]));
 
                 groups.Add(new DuplicateGroup
                 {
@@ -148,7 +150,7 @@ public class DuplicateDetectionService
                 });
 
                 foreach (var idx in nearGroup)
-                    processed.Add(idx);
+                    processed[idx] = true;
             }
         }
 

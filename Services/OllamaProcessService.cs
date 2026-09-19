@@ -22,7 +22,7 @@ public class OllamaProcessService
     /// additional KV-cache VRAM, so this stays modest to avoid pushing a vision model
     /// out of VRAM and into far slower CPU inference.
     /// </summary>
-    public const int DefaultNumParallel = 8;
+    public const int DefaultNumParallel = 32;
 
     private readonly string _endpoint;
 

@@ -86,6 +86,21 @@
                 <TextBlock Text="{Binding ScanStatusText}" Foreground="#999" FontSize="11"
                            TextTrimming="CharacterEllipsis" Margin="0,4"/>
 
+                <!-- Background AI pass: runs on after the scan, so it needs its own
+                     progress and a cancel button of its own. -->
+                <ProgressBar Value="{Binding AnalyzeProgress}" Minimum="0" Maximum="100"
+                             Height="8" Margin="0,2" Foreground="#5A7AAA"
+                             Visibility="{Binding IsAnalyzing, Converter={StaticResource BoolToVisConverter}}"/>
+
+                <TextBlock Text="{Binding AnalyzeStatusText}" Foreground="#999" FontSize="11"
+                           TextTrimming="CharacterEllipsis" Margin="0,2"
+                           Visibility="{Binding IsAnalyzing, Converter={StaticResource BoolToVisConverter}}"/>
+
+                <Button Content="⏹ Stop AI Analysis" Command="{Binding CancelScanCommand}"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                        Background="#4A2A2A" Foreground="#CCC" Margin="0,2,0,4"
+                        Visibility="{Binding IsAnalyzing, Converter={StaticResource BoolToVisConverter}}"/>
+
                 <!-- AI Status -->
                 <StackPanel Margin="0,8,0,0">
                     <StackPanel Orientation="Horizontal">

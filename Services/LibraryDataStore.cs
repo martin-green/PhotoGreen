@@ -14,6 +14,8 @@ public class LibraryDataStore
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
+    private static readonly Lock SaveLock = new();
+
     public static string GetLibraryFilePath(string rootFolder)
     {
         return Path.Combine(rootFolder, LibraryFileName);
@@ -37,20 +39,35 @@ public class LibraryDataStore
         }
     }
 
+    /// <summary>
+    /// Writes the library file. The background AI pass, the scan and user edits can all
+    /// save concurrently, so writes are serialised and staged through a temp file: a
+    /// direct overwrite that fails part way through would leave a truncated, unreadable
+    /// library behind.
+    /// </summary>
     public static void Save(LibraryData data)
     {
         if (string.IsNullOrEmpty(data.RootFolder))
             return;
 
         var path = GetLibraryFilePath(data.RootFolder);
-        try
+        lock (SaveLock)
         {
-            var json = JsonSerializer.Serialize(data, JsonOptions);
-            File.WriteAllText(path, json);
-        }
-        catch
-        {
-            // Silently ignore write failures
+            try
+            {
+                var json = JsonSerializer.Serialize(data, JsonOptions);
+                var tempPath = path + ".tmp";
+                File.WriteAllText(tempPath, json);
+
+                if (File.Exists(path))
+                    File.Replace(tempPath, path, null);
+                else
+                    File.Move(tempPath, path);
+            }
+            catch
+            {
+                // Silently ignore write failures
+            }
         }
     }
 }

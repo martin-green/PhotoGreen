@@ -1,5 +1,4 @@
 using System.IO;
-using System.Threading.Channels;
 using ImageMagick;
 using PhotoGreen.Models;
 
@@ -40,11 +39,11 @@ public class LibraryScanService
     private static readonly int AiConcurrency = OllamaProcessService.DefaultNumParallel;
 
     /// <summary>
-    /// How many prepared files may wait for AI. Each holds a ~512px JPEG (a few hundred
-    /// KB), so a generous buffer costs little and stops fast CPU workers from stalling
-    /// on a full queue while the slower AI stage drains it.
+    /// How many images the background AI pass analyses between saves. Persisting
+    /// periodically means a cancelled or interrupted pass keeps its completed work
+    /// instead of starting over.
     /// </summary>
-    private const int PrepareQueueDepth = 64;
+    private const int SaveInterval = 25;
 
     public LibraryScanService(AIService aiService)
     {
@@ -52,15 +51,19 @@ public class LibraryScanService
         _faceService = new FaceRecognitionService(aiService);
     }
 
+    /// <summary>
+    /// Fast pass: enumerate, hash and detect duplicates. Deliberately does no AI work so
+    /// duplicate results are available in seconds instead of waiting on the vision model.
+    /// Follow it with <see cref="AnalyzeLibraryAsync"/> to fill in tags, descriptions and faces.
+    /// </summary>
     public async Task<LibraryData> ScanAsync(
         string rootFolder,
         IProgress<LibraryScanProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
         // IsAvailable is a cached flag from the last availability probe. Ollama may have been
-        // started (or stopped) since then, so re-probe here. Without this a scan started after
-        // the app launched with Ollama down would silently skip all AI analysis and still
-        // persist the files as scanned.
+        // started (or stopped) since then, so re-probe here. The flag decides whether files are
+        // marked as still owing AI work, so a stale value would strand them.
         await _aiService.CheckAvailabilityAsync(cancellationToken);
 
         var data = LibraryDataStore.Load(rootFolder);
@@ -79,103 +82,67 @@ public class LibraryScanService
         var processedCount = 0;
         var skippedCount = 0;
 
-        var updatedImages = new List<LibraryImageInfo>();
-
-        // Bounded queue so CPU workers stay a little ahead of AI without decoding the
-        // whole library into memory.
-        var channel = Channel.CreateBounded<PreparedFile>(new BoundedChannelOptions(PrepareQueueDepth)
-        {
-            SingleReader = false,
-            FullMode = BoundedChannelFullMode.Wait
-        });
-
-        // Producer: decode, hash and thumbnail in parallel across cores.
-        var producer = Task.Run(async () =>
-        {
-            try
-            {
-                await Parallel.ForEachAsync(
-                    allFiles,
-                    new ParallelOptions
-                    {
-                        MaxDegreeOfParallelism = PrepareParallelism,
-                        CancellationToken = cancellationToken
-                    },
-                    async (filePath, ct) =>
-                    {
-                        var relativePath = Path.GetRelativePath(rootFolder, filePath);
-
-                        PreparedFile? prepared = null;
-                        try
-                        {
-                            var fileInfo = new FileInfo(filePath);
-
-                            // The file may have been moved or deleted since enumeration;
-                            // drop it from the library instead of failing the whole scan.
-                            if (fileInfo.Exists)
-                                prepared = PrepareFile(filePath, relativePath, fileInfo, existing);
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            throw;
-                        }
-                        catch
-                        {
-                            // A single unreadable or vanished file must not abort the scan.
-                        }
-
-                        if (prepared != null)
-                            await channel.Writer.WriteAsync(prepared, ct);
-                        else
-                            Interlocked.Increment(ref skippedCount);
-                    });
-
-                channel.Writer.Complete();
-            }
-            catch (Exception ex)
-            {
-                channel.Writer.Complete(ex);
-            }
-        }, cancellationToken);
-
-        // Consumer: several AI requests are kept in flight so the GPU always has work
-        // queued. Ollama interleaves prefill and generation across its parallel slots,
-        // which a strictly one-at-a-time loop leaves idle between calls.
+        var updatedImages = new List<LibraryImageInfo>(totalCount);
         var resultsLock = new object();
 
-        var consumers = new Task[AiConcurrency];
-        for (var c = 0; c < AiConcurrency; c++)
-        {
-            consumers[c] = Task.Run(async () =>
+        await Parallel.ForEachAsync(
+            allFiles,
+            new ParallelOptions
             {
-                await foreach (var prepared in channel.Reader.ReadAllAsync(cancellationToken))
+                MaxDegreeOfParallelism = PrepareParallelism,
+                CancellationToken = cancellationToken
+            },
+            (filePath, ct) =>
+            {
+                var relativePath = Path.GetRelativePath(rootFolder, filePath);
+
+                PreparedFile? prepared = null;
+                try
                 {
-                    await AnalyzeAsync(prepared, cancellationToken);
+                    var fileInfo = new FileInfo(filePath);
 
-                    int done;
-                    lock (resultsLock)
-                    {
-                        updatedImages.Add(prepared.ImageInfo);
-                        done = ++processedCount;
-                    }
-
-                    progress?.Report(new LibraryScanProgress
-                    {
-                        CurrentFile = prepared.RelativePath,
-                        ProcessedCount = done,
-                        TotalCount = totalCount,
-                        Phase = prepared.NeedsAi ? "Analyzing" : "Scanning"
-                    });
+                    // The file may have been moved or deleted since enumeration;
+                    // drop it from the library instead of failing the whole scan.
+                    if (fileInfo.Exists)
+                        prepared = PrepareFile(filePath, relativePath, fileInfo, existing);
                 }
-            }, cancellationToken);
-        }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch
+                {
+                    // A single unreadable or vanished file must not abort the scan.
+                }
 
-        await Task.WhenAll(consumers);
-        await producer;
+                if (prepared == null)
+                {
+                    Interlocked.Increment(ref skippedCount);
+                    return ValueTask.CompletedTask;
+                }
 
-        // Photos can be deleted while the scan is running. Prepared records are captured
-        // before AI analysis completes, so reconcile against the file system before saving
-        // to avoid resurrecting entries the user just removed.
+                prepared.ImageInfo.AnalyzedUtc = DateTime.UtcNow;
+
+                int done;
+                lock (resultsLock)
+                {
+                    updatedImages.Add(prepared.ImageInfo);
+                    done = ++processedCount;
+                }
+
+                progress?.Report(new LibraryScanProgress
+                {
+                    CurrentFile = relativePath,
+                    ProcessedCount = done,
+                    TotalCount = totalCount,
+                    Phase = "Scanning"
+                });
+
+                return ValueTask.CompletedTask;
+            });
+
+        // Photos can be deleted while the scan is running; reconcile against the file
+        // system before saving to avoid resurrecting entries the user just removed.
         updatedImages.RemoveAll(i => !File.Exists(Path.Combine(rootFolder, i.RelativePath)));
 
         // Parallel completion order is arbitrary; restore a stable order for the UI.
@@ -187,12 +154,6 @@ public class LibraryScanService
 
         // Find duplicates
         data.DuplicateGroups = DuplicateDetectionService.FindDuplicates(updatedImages);
-
-        // Cluster faces
-        if (_aiService.IsAvailable)
-        {
-            data.FaceClusters = _faceService.ClusterFaces(updatedImages);
-        }
 
         // Persist
         LibraryDataStore.Save(data);
@@ -209,23 +170,21 @@ public class LibraryScanService
     }
 
     /// <summary>
-    /// CPU-bound result for one file: hashes plus the downscaled JPEG used for AI.
-    /// Produced on worker threads so decoding overlaps with GPU inference.
+    /// CPU-bound result for one file: the hashes and whether the file still owes the
+    /// background AI pass any work.
     /// </summary>
     private sealed class PreparedFile
     {
         public required LibraryImageInfo ImageInfo { get; init; }
         public required string FilePath { get; init; }
         public required string RelativePath { get; init; }
-        public byte[]? ThumbnailBytes { get; init; }
         public bool NeedsAi { get; init; }
         public bool Decodable { get; init; }
     }
 
     /// <summary>
-    /// Performs all CPU/disk work for a file in one pass. The image is decoded a single
-    /// time and reused for both the perceptual hash and the AI thumbnail, which halves
-    /// the decode cost that dominates scanning of large camera JPEGs.
+    /// Performs the CPU/disk work for a file: file hash plus, when the file is new or
+    /// changed, a single decode for the perceptual hash.
     /// </summary>
     private PreparedFile? PrepareFile(
         string filePath,
@@ -294,41 +253,34 @@ public class LibraryScanService
             };
         }
 
-        byte[]? thumbBytes = null;
         var decodable = true;
 
-        try
+        if (needsHash)
         {
-            using var image = new MagickImage();
-            image.Read(filePath);
+            try
+            {
+                using var image = new MagickImage();
+                image.Read(filePath);
 
-            // Both consumers only need a small image, so normalise once up front and
-            // reuse this single decode for the hash and the thumbnail.
-            image.AutoOrient();
-            image.Strip();
+                // Only the perceptual hash needs a decode here. The thumbnail the vision
+                // model wants is built later by the background AI pass, which is bound by
+                // inference latency and can absorb the decode for free.
+                image.AutoOrient();
+                image.Strip();
 
-            if (needsHash)
                 imageInfo.PerceptualHash = DuplicateDetectionService
                     .ComputePerceptualHash(image).ToString("x16");
-
-            if (needsAi)
-            {
-                using var thumb = image.Clone();
-                thumb.Resize(new MagickGeometry(512, 512) { Greater = true });
-                thumb.Format = MagickFormat.Jpeg;
-                thumb.Quality = 80;
-                thumbBytes = thumb.ToByteArray();
             }
-        }
-        catch (FileNotFoundException) { return null; }
-        catch (DirectoryNotFoundException) { return null; }
-        catch
-        {
-            // Undecodable file (corrupt or unsupported); still keep the entry.
-            decodable = false;
+            catch (FileNotFoundException) { return null; }
+            catch (DirectoryNotFoundException) { return null; }
+            catch
+            {
+                // Undecodable file (corrupt or unsupported); still keep the entry.
+                decodable = false;
 
-            if (!File.Exists(filePath))
-                return null;
+                if (!File.Exists(filePath))
+                    return null;
+            }
         }
 
         return new PreparedFile
@@ -336,52 +288,141 @@ public class LibraryScanService
             ImageInfo = imageInfo,
             FilePath = filePath,
             RelativePath = relativePath,
-            ThumbnailBytes = thumbBytes,
             NeedsAi = needsAi,
             Decodable = decodable
         };
     }
 
     /// <summary>
-    /// Runs AI analysis for an already-prepared file. Kept separate from <see cref="PrepareFile"/>
-    /// so the network/GPU wait does not block the CPU decode workers.
+    /// Background pass: classifies every image that still owes AI work. Runs after
+    /// <see cref="ScanAsync"/> so duplicate detection is never held up by the vision model.
+    /// Results are saved periodically, so cancelling or crashing mid-pass keeps the work
+    /// already done and the next run resumes from there.
     /// </summary>
-    private async Task AnalyzeAsync(PreparedFile prepared, CancellationToken cancellationToken)
+    public async Task<LibraryData> AnalyzeLibraryAsync(
+        LibraryData data,
+        IProgress<LibraryScanProgress>? progress = null,
+        CancellationToken cancellationToken = default)
     {
-        var imageInfo = prepared.ImageInfo;
+        await _aiService.CheckAvailabilityAsync(cancellationToken);
+        if (!_aiService.IsAvailable)
+            return data;
 
-        if (!prepared.NeedsAi)
-        {
-            imageInfo.AnalyzedUtc = DateTime.UtcNow;
-            return;
-        }
+        var pending = data.Images.Where(i => i.AiAnalyzedUtc is null).ToList();
+        var totalCount = pending.Count;
+        if (totalCount == 0)
+            return data;
+
+        var rootFolder = data.RootFolder;
+        var processedCount = 0;
+        var sinceLastSave = 0;
+        var saveLock = new object();
 
         try
         {
-            if (prepared.ThumbnailBytes == null)
-            {
-                // The file cannot be decoded, so retrying it every scan is wasted work.
-                if (!prepared.Decodable)
-                    imageInfo.AiAnalyzedUtc = DateTime.UtcNow;
-            }
-            else
-            {
-                var analysis = await _aiService.AnalyzeImageAsync(prepared.ThumbnailBytes, cancellationToken);
-                if (analysis != null)
+            await Parallel.ForEachAsync(
+                pending,
+                new ParallelOptions
                 {
-                    imageInfo.Description = analysis.Description;
-                    imageInfo.Tags = analysis.Tags;
-                    imageInfo.SceneType = analysis.SceneType;
-                    imageInfo.Faces = analysis.Faces.Select(f => new FaceInfo
-                    {
-                        Description = f.Description,
-                        ApproximatePosition = f.ApproximatePosition,
-                        Confidence = 0.8
-                    }).ToList();
+                    MaxDegreeOfParallelism = AiConcurrency,
+                    CancellationToken = cancellationToken
+                },
+                async (imageInfo, ct) =>
+                {
+                    var filePath = Path.Combine(rootFolder, imageInfo.RelativePath);
+                    await AnalyzeImageAsync(imageInfo, filePath, ct);
 
-                    // Only mark AI as done when it actually produced a result.
+                    int done;
+                    bool shouldSave;
+                    lock (saveLock)
+                    {
+                        done = ++processedCount;
+                        shouldSave = ++sinceLastSave >= SaveInterval;
+                        if (shouldSave)
+                            sinceLastSave = 0;
+                    }
+
+                    if (shouldSave)
+                        LibraryDataStore.Save(data);
+
+                    progress?.Report(new LibraryScanProgress
+                    {
+                        CurrentFile = imageInfo.RelativePath,
+                        ProcessedCount = done,
+                        TotalCount = totalCount,
+                        Phase = "Analyzing"
+                    });
+                });
+        }
+        finally
+        {
+            // Cluster over everything that has results so far, so a cancelled pass still
+            // leaves usable face groups rather than discarding the work.
+            data.FaceClusters = _faceService.ClusterFaces(data.Images);
+            LibraryDataStore.Save(data);
+        }
+
+        progress?.Report(new LibraryScanProgress
+        {
+            CurrentFile = "Analysis complete",
+            ProcessedCount = totalCount,
+            TotalCount = totalCount,
+            Phase = "Done"
+        });
+
+        return data;
+    }
+
+    /// <summary>
+    /// Decodes the thumbnail for one image and runs the vision model over it. The decode
+    /// happens here rather than in the fast pass because this stage waits on inference
+    /// anyway, so the CPU cost overlaps with the GPU instead of delaying duplicates.
+    /// </summary>
+    private async Task AnalyzeImageAsync(
+        LibraryImageInfo imageInfo,
+        string filePath,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            byte[] thumbBytes;
+            try
+            {
+                using var image = new MagickImage();
+                image.Read(filePath);
+                image.AutoOrient();
+                image.Strip();
+                image.Resize(new MagickGeometry(512, 512) { Greater = true });
+                image.Format = MagickFormat.Jpeg;
+                image.Quality = 80;
+                thumbBytes = image.ToByteArray();
+            }
+            catch (FileNotFoundException) { return; }
+            catch (DirectoryNotFoundException) { return; }
+            catch
+            {
+                // Undecodable file (corrupt or unsupported). Retrying it on every pass is
+                // wasted work, so mark it done unless the file simply vanished.
+                if (File.Exists(filePath))
                     imageInfo.AiAnalyzedUtc = DateTime.UtcNow;
-                }
+                return;
+            }
+
+            var analysis = await _aiService.AnalyzeImageAsync(thumbBytes, cancellationToken);
+            if (analysis != null)
+            {
+                imageInfo.Description = analysis.Description;
+                imageInfo.Tags = analysis.Tags;
+                imageInfo.SceneType = analysis.SceneType;
+                imageInfo.Faces = analysis.Faces.Select(f => new FaceInfo
+                {
+                    Description = f.Description,
+                    ApproximatePosition = f.ApproximatePosition,
+                    Confidence = 0.8
+                }).ToList();
+
+                // Only mark AI as done when it actually produced a result.
+                imageInfo.AiAnalyzedUtc = DateTime.UtcNow;
             }
         }
         catch (OperationCanceledException)
@@ -390,9 +431,7 @@ public class LibraryScanService
         }
         catch
         {
-            // AI failure is non-fatal; AiAnalyzedUtc stays null so it retries next scan.
+            // AI failure is non-fatal; AiAnalyzedUtc stays null so it retries next pass.
         }
-
-        imageInfo.AnalyzedUtc = DateTime.UtcNow;
     }
 }

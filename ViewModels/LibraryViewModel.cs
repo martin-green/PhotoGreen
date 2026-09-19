@@ -18,6 +18,8 @@ public partial class LibraryViewModel : ObservableObject
     private LibraryScanService? _scanService;
     private LibraryData? _libraryData;
     private CancellationTokenSource? _scanCts;
+    private CancellationTokenSource? _analyzeCts;
+    private Task? _analyzeTask;
     private CancellationTokenSource? _thumbnailCts;
     private ThumbnailCacheService? _thumbnailCache;
 
@@ -38,6 +40,17 @@ public partial class LibraryViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _isScanning;
+
+    /// <summary>True while the background AI classification pass is running.</summary>
+    [ObservableProperty]
+    private bool _isAnalyzing;
+
+    /// <summary>Progress of the background AI pass, reported separately from the scan.</summary>
+    [ObservableProperty]
+    private double _analyzeProgress;
+
+    [ObservableProperty]
+    private string _analyzeStatusText = string.Empty;
 
     [ObservableProperty]
     private double _scanProgress;
@@ -300,16 +313,23 @@ public partial class LibraryViewModel : ObservableObject
 
         try
         {
+            // Fast pass only: hashes and duplicates. AI classification runs afterwards in
+            // the background so duplicate results appear without waiting on the GPU.
             _libraryData = await Task.Run(
                 () => _scanService.ScanAsync(RootFolder, progressHandler, _scanCts.Token));
             BuildGroups();
 
-            // The scan re-probes the AI, so reflect the outcome here. Warn explicitly when it
-            // was unavailable, otherwise a scan that produced no tags or faces looks successful.
             AiAvailable = _aiService.IsAvailable;
+            var pendingAi = _libraryData.Images.Count(i => i.AiAnalyzedUtc is null);
+
             ScanStatusText = AiAvailable
                 ? $"Scan complete — {_libraryData.Images.Count} images"
                 : $"Scan complete — {_libraryData.Images.Count} images (AI unavailable, no tags or faces)";
+
+            IsScanning = false;
+
+            if (AiAvailable && pendingAi > 0)
+                StartBackgroundAnalysis(_libraryData);
         }
         catch (OperationCanceledException)
         {
@@ -326,10 +346,70 @@ public partial class LibraryViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Runs AI classification over the scanned library without blocking the caller. The
+    /// pass saves as it goes, so cancelling it or closing mid-way keeps completed work.
+    /// </summary>
+    private void StartBackgroundAnalysis(LibraryData data)
+    {
+        _analyzeCts?.Cancel();
+        _analyzeCts = new CancellationTokenSource();
+        var token = _analyzeCts.Token;
+        var service = _scanService!;
+
+        IsAnalyzing = true;
+        AnalyzeProgress = 0;
+        AnalyzeStatusText = "Starting AI analysis...";
+
+        var analyzeProgress = new Progress<LibraryScanProgress>(p =>
+        {
+            AnalyzeProgress = p.Percentage;
+            AnalyzeStatusText = $"Analyzing: {p.CurrentFile} ({p.ProcessedCount}/{p.TotalCount})";
+        });
+
+        _analyzeTask = Task.Run(async () =>
+        {
+            try
+            {
+                await service.AnalyzeLibraryAsync(data, analyzeProgress, token);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected on cancel; partial results are already persisted.
+            }
+            catch (Exception ex)
+            {
+                // Marshal back to the UI thread before touching bound state.
+                App.Current?.Dispatcher.Invoke(() =>
+                    AnalyzeStatusText = $"AI analysis failed: {ex.Message}");
+                return;
+            }
+            finally
+            {
+                App.Current?.Dispatcher.Invoke(() => IsAnalyzing = false);
+            }
+
+            App.Current?.Dispatcher.Invoke(() =>
+            {
+                AnalyzeStatusText = token.IsCancellationRequested
+                    ? "AI analysis cancelled"
+                    : "AI analysis complete";
+
+                // Tags, scenes and face clusters changed, so rebuild any view that uses them.
+                BuildGroups();
+            });
+        }, token);
+    }
+
+    /// <summary>
+    /// Cancels whichever pass is running. The AI pass outlives the scan, so cancelling
+    /// must reach it too or the button would appear to do nothing once scanning ends.
+    /// </summary>
     [RelayCommand]
     private void CancelScan()
     {
         _scanCts?.Cancel();
+        _analyzeCts?.Cancel();
     }
 
     [RelayCommand]
@@ -668,6 +748,12 @@ public partial class LibraryViewModel : ObservableObject
     {
         if (string.IsNullOrEmpty(RootFolder) || !Directory.Exists(RootFolder))
             return;
+
+        // A background AI pass still running against the previous folder would keep
+        // saving into that library and race this load, so stop it first.
+        _analyzeCts?.Cancel();
+        IsAnalyzing = false;
+        AnalyzeStatusText = string.Empty;
 
         _libraryData = LibraryDataStore.Load(RootFolder);
 
