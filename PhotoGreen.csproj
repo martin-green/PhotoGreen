@@ -12,6 +12,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Include=".github\workflows\release.yml" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Also embedded as a resource so windows can reference it via pack:// URIs. -->
     <Resource Include="Assets\PhotoGreen.ico" />
   </ItemGroup>

@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Get version
+        id: ver
+        shell: pwsh
+        run: echo "version=$('${{ github.ref_name }}'.TrimStart('v'))" >> $env:GITHUB_OUTPUT
+
+      - name: Publish
+        run: >
+          dotnet publish PhotoGreen.csproj -c Release -r win-x64 --self-contained true
+          -p:Version=${{ steps.ver.outputs.version }}
+          -o publish
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path publish/* -DestinationPath PhotoGreen-${{ github.ref_name }}-win-x64.zip
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: PhotoGreen-${{ github.ref_name }}-win-x64.zip
+          generate_release_notes: true
