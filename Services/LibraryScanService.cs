@@ -20,7 +20,8 @@ public class LibraryScanService
         ".jpg", ".jpeg",
         ".arw", ".cr2", ".cr3", ".nef", ".dng", ".raf", ".orf", ".rw2", ".pef", ".srw",
         ".tif", ".tiff",
-        ".png"
+        ".png",
+        ".jxl"
     };
 
     private readonly AIService _aiService;

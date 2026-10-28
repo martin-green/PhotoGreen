@@ -14,6 +14,21 @@ public partial class LibraryView : UserControl
         InitializeComponent();
     }
 
+    /// <summary>Outer width of one thumbnail: 130 px plus 4 px margin on each side.</summary>
+    private const double ThumbnailSlotWidth = 138;
+
+    /// <summary>Allowance for the vertical scrollbar so rows never overflow horizontally.</summary>
+    private const double ScrollBarAllowance = 20;
+
+    private void OnThumbnailListSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (!e.WidthChanged || DataContext is not LibraryViewModel vm)
+            return;
+
+        var available = e.NewSize.Width - ScrollBarAllowance;
+        vm.ItemsPerRow = Math.Max(1, (int)(available / ThumbnailSlotWidth));
+    }
+
     private void OnThumbnailClick(object sender, MouseButtonEventArgs e)
     {
         if (sender is FrameworkElement fe && fe.DataContext is LibraryThumbnailItem item)

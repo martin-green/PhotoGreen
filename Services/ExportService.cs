@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using ImageMagick;
 using PhotoGreen.Models;
 
 namespace PhotoGreen.Services;
@@ -10,7 +11,8 @@ public enum ExportFormat
 {
     Jpeg,
     Png,
-    Tiff
+    Tiff,
+    Jxl
 }
 
 public class ExportSettings
@@ -27,6 +29,16 @@ public class ExportService
         var bitmap = RawDevelopmentEngine.CreateBitmapFromResult(developResult);
         var source = ApplyCrop(bitmap, developResult.Width, developResult.Height, crop);
 
+        var dir = Path.GetDirectoryName(exportSettings.OutputPath);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+
+        if (exportSettings.Format == ExportFormat.Jxl)
+        {
+            ExportJxl(source, exportSettings);
+            return;
+        }
+
         BitmapEncoder encoder = exportSettings.Format switch
         {
             ExportFormat.Jpeg => new JpegBitmapEncoder { QualityLevel = exportSettings.JpegQuality },
@@ -37,12 +49,23 @@ public class ExportService
 
         encoder.Frames.Add(BitmapFrame.Create(source));
 
-        var dir = Path.GetDirectoryName(exportSettings.OutputPath);
-        if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
-
         using var stream = File.Create(exportSettings.OutputPath);
         encoder.Save(stream);
+    }
+
+    private static void ExportJxl(BitmapSource source, ExportSettings exportSettings)
+    {
+        // WPF has no JPEG XL encoder; hand a lossless PNG to ImageMagick for encoding.
+        var png = new PngBitmapEncoder();
+        png.Frames.Add(BitmapFrame.Create(source));
+        using var ms = new MemoryStream();
+        png.Save(ms);
+        ms.Position = 0;
+
+        using var image = new MagickImage(ms, MagickFormat.Png);
+        image.Format = MagickFormat.Jxl;
+        image.Quality = (uint)exportSettings.JpegQuality;
+        image.Write(exportSettings.OutputPath);
     }
 
     public static async Task ExportAsync(ushort[] linearPixels, int width, int height,
@@ -77,9 +100,10 @@ public class ExportService
         ExportFormat.Jpeg => ".jpg",
         ExportFormat.Png => ".png",
         ExportFormat.Tiff => ".tif",
+        ExportFormat.Jxl => ".jxl",
         _ => ".jpg"
     };
 
     public static string GetFileFilter() =>
-        "JPEG (*.jpg)|*.jpg|PNG (*.png)|*.png|TIFF (*.tif)|*.tif";
+        "JPEG (*.jpg)|*.jpg|PNG (*.png)|*.png|TIFF (*.tif)|*.tif|JPEG XL (*.jxl)|*.jxl";
 }

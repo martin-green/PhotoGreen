@@ -8,6 +8,7 @@ public enum ImageFileType
     Raw,
     Tiff,
     Png,
+    Jxl,
     Other
 }
 
@@ -40,6 +41,7 @@ public class ImageFileEntry
         ".arw" or ".cr2" or ".cr3" or ".nef" or ".dng" or ".raf" or ".orf" or ".rw2" or ".pef" or ".srw" => ImageFileType.Raw,
         ".tif" or ".tiff" => ImageFileType.Tiff,
         ".png" => ImageFileType.Png,
+        ".jxl" => ImageFileType.Jxl,
         _ => ImageFileType.Other
     };
 

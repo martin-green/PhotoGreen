@@ -92,6 +92,61 @@ public partial class LibraryViewModel : ObservableObject
 
     public ObservableCollection<LibraryGroup> Groups { get; } = [];
 
+    /// <summary>
+    /// Groups flattened into header and thumbnail rows, so the list can virtualize per
+    /// row instead of realizing every thumbnail of a large group at once.
+    /// </summary>
+    public ObservableCollection<LibraryRow> Rows { get; } = [];
+
+    private int _itemsPerRow = 1;
+
+    /// <summary>Number of thumbnails per row; set by the view from the available width.</summary>
+    public int ItemsPerRow
+    {
+        get => _itemsPerRow;
+        set
+        {
+            value = Math.Max(1, value);
+            if (SetProperty(ref _itemsPerRow, value))
+                RebuildRows();
+        }
+    }
+
+    private void OnGroupsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        // Groups are only appended after being fully populated; anything else rebuilds.
+        if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Add &&
+            e.NewItems is not null && e.NewStartingIndex == Groups.Count - e.NewItems.Count)
+        {
+            foreach (LibraryGroup group in e.NewItems)
+                AppendRows(group);
+        }
+        else
+        {
+            RebuildRows();
+        }
+    }
+
+    private void RebuildRows()
+    {
+        Rows.Clear();
+        foreach (var group in Groups)
+            AppendRows(group);
+    }
+
+    private void AppendRows(LibraryGroup group)
+    {
+        Rows.Add(new LibraryHeaderRow(group));
+        for (int i = 0; i < group.Items.Count; i += _itemsPerRow)
+        {
+            var count = Math.Min(_itemsPerRow, group.Items.Count - i);
+            var slice = new LibraryThumbnailItem[count];
+            for (int j = 0; j < count; j++)
+                slice[j] = group.Items[i + j];
+            Rows.Add(new LibraryThumbnailRow(slice));
+        }
+    }
+
     // Detail panel data
     [ObservableProperty]
     private string _detailFileName = string.Empty;
@@ -112,6 +167,7 @@ public partial class LibraryViewModel : ObservableObject
 
     public LibraryViewModel()
     {
+        Groups.CollectionChanged += OnGroupsChanged;
         RestoreLastLibraryFolder();
         _ = CheckAIAsync();
     }
@@ -595,6 +651,62 @@ public partial class LibraryViewModel : ObservableObject
         };
 
         DeleteSelectedCommand.NotifyCanExecuteChanged();
+        FocusStackSelectedCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>True while a focus stack is being computed.</summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(FocusStackSelectedCommand))]
+    private bool _isFocusStacking;
+
+    private bool CanFocusStackSelected() => _selectedItems.Count >= 2 && !IsFocusStacking;
+
+    /// <summary>
+    /// Combines the selected photos (shot at different focus distances) into a single
+    /// image taking the sharpest areas from each, saved as a 16-bit TIFF next to the first photo.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanFocusStackSelected))]
+    private async Task FocusStackSelected()
+    {
+        if (_selectedItems.Count < 2)
+            return;
+
+        var paths = _selectedItems
+            .Select(i => i.FullPath)
+            .Where(File.Exists)
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (paths.Count < 2)
+            return;
+
+        var folder = Path.GetDirectoryName(paths[0])!;
+        var baseName = Path.GetFileNameWithoutExtension(paths[0]) + "_focusstack";
+        var outputPath = Path.Combine(folder, baseName + ".tif");
+        for (var n = 2; File.Exists(outputPath); n++)
+            outputPath = Path.Combine(folder, $"{baseName}_{n}.tif");
+
+        IsFocusStacking = true;
+        var progress = new Progress<string>(s => ScanStatusText = s);
+        try
+        {
+            await FocusStackService.StackAsync(paths, outputPath, progress);
+            LoadLibrary();
+            ScanStatusText = $"Focus stack saved: {Path.GetFileName(outputPath)}";
+        }
+        catch (Exception ex)
+        {
+            ScanStatusText = "Focus stack failed";
+            MessageBox.Show(
+                $"Focus stacking failed:\n\n{ex.Message}",
+                "Focus stack",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+        finally
+        {
+            IsFocusStacking = false;
+        }
     }
 
     private bool CanDeleteSelected() => _selectedItems.Count > 0;
@@ -741,7 +853,8 @@ public partial class LibraryViewModel : ObservableObject
         ".jpg", ".jpeg",
         ".arw", ".cr2", ".cr3", ".nef", ".dng", ".raf", ".orf", ".rw2", ".pef", ".srw",
         ".tif", ".tiff",
-        ".png"
+        ".png",
+        ".jxl"
     };
 
     private void LoadLibrary()

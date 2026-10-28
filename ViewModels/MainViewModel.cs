@@ -152,6 +152,7 @@ public partial class MainViewModel : ObservableObject
         {
             ".png" => ExportFormat.Png,
             ".tif" or ".tiff" => ExportFormat.Tiff,
+            ".jxl" => ExportFormat.Jxl,
             _ => ExportFormat.Jpeg
         };
 

@@ -15,7 +15,8 @@ public class CameraImportService : IDisposable
         ".jpg", ".jpeg",
         ".arw", ".cr2", ".cr3", ".nef", ".dng", ".raf", ".orf", ".rw2", ".pef", ".srw",
         ".tif", ".tiff",
-        ".png"
+        ".png",
+        ".jxl"
     };
 
     // WPD (Windows Portable Devices) interface class GUID — covers MTP/PTP cameras
